@@ -131,15 +131,31 @@ export const Route = createFileRoute("/api/auth/xero/callback")({
           const connections = connRes.ok ? await connRes.json() : [];
           console.log("[Xero callback] connections count:", Array.isArray(connections) ? connections.length : 0);
 
-          const zapplyOrg =
-            (connections as any[]).find((c) =>
-              (c.tenantName ?? "").toLowerCase().includes("zapply"),
-            ) ??
-            (connections as any[])[0] ??
-            null;
+          // Prefer the Zapply tenant; otherwise force the user to retry and
+          // pick it explicitly. Falling back to connections[0] silently chose
+          // Xero's "Demo Company (Global)" sandbox in the past, populating
+          // the dashboard with toy numbers instead of real books.
+          const allConnections = Array.isArray(connections) ? (connections as any[]) : [];
+          const zapplyOrg = allConnections.find((c) =>
+            (c.tenantName ?? "").toLowerCase().includes("zapply"),
+          );
 
-          const tenantId = zapplyOrg?.tenantId ?? null;
-          const tenantName = zapplyOrg?.tenantName ?? "Unknown";
+          if (!zapplyOrg) {
+            const available = allConnections
+              .map((c) => c?.tenantName ?? "?")
+              .filter(Boolean)
+              .join(", ");
+            console.error("[Xero callback] no Zapply tenant found in connections:", available);
+            return Response.redirect(
+              `${appUrl}/?xero_error=wrong_org&detail=${encodeURIComponent(
+                available || "no organizations returned",
+              )}`,
+              302,
+            );
+          }
+
+          const tenantId = zapplyOrg.tenantId ?? null;
+          const tenantName = zapplyOrg.tenantName ?? "Unknown";
 
           const expiresAt = new Date(
             Date.now() + ((expires_in ?? 1800) - 60) * 1000,
