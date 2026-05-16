@@ -1,0 +1,4 @@
+project_id = "coktedrgtpecruympsvv"
+
+[functions.scheduled-sync]
+verify_jwt = false

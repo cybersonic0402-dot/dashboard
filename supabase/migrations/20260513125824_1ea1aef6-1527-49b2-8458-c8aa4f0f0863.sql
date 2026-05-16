@@ -1,0 +1,2 @@
+CREATE POLICY "loop_sync_state insert app" ON public.loop_sync_state FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "loop_sync_state update app" ON public.loop_sync_state FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);

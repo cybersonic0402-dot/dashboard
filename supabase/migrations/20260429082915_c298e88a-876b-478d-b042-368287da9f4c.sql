@@ -1,0 +1,1 @@
+DELETE FROM data_cache WHERE provider = 'jortt';
