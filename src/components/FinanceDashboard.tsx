@@ -3144,10 +3144,12 @@ const OpExBreakdownSection = ({ opexByMonth: data = null, opexDetail: detail = n
                 {activeDetail.label}
               </div>
               <div className="mt-0.5 text-[18px] font-semibold tabular-nums">
-                €{current[activeCategory]?.toLocaleString()}
+                €{Math.round(currentForDisplay[activeCategory] ?? 0).toLocaleString()}
               </div>
               <div className="text-[10px] text-neutral-400">
-                {((current[activeCategory] / totalCurrent) * 100).toFixed(1)}% share
+                {totalCurrent > 0
+                  ? (((currentForDisplay[activeCategory] ?? 0) / totalCurrent) * 100).toFixed(1)
+                  : "0.0"}% share
               </div>
             </div>
           </div>
