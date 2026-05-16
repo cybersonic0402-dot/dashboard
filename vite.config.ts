@@ -15,6 +15,9 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 // load normally; the Start compiler still strips handler bodies on the client and routes
 // calls through `/_serverFn`. Specifier checks (`server-only`, etc.) remain in effect.
 export default defineConfig({
+  // Disable the Cloudflare Workers build output — we deploy to Vercel now,
+  // where the SSR bundle is wrapped by a Node serverless function in api/.
+  cloudflare: false,
   tanstackStart: {
     importProtection: {
       client: {
