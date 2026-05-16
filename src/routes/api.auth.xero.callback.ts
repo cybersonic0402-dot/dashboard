@@ -131,21 +131,30 @@ export const Route = createFileRoute("/api/auth/xero/callback")({
           const connections = connRes.ok ? await connRes.json() : [];
           console.log("[Xero callback] connections count:", Array.isArray(connections) ? connections.length : 0);
 
-          // Prefer the Zapply tenant; otherwise force the user to retry and
-          // pick it explicitly. Falling back to connections[0] silently chose
-          // Xero's "Demo Company (Global)" sandbox in the past, populating
-          // the dashboard with toy numbers instead of real books.
+          // Org selection rules:
+          //  1. Prefer any connection whose name contains "zapply".
+          //  2. If there's only one connection, just use it — refusing here
+          //     would leave the dashboard with no Xero data at all when the
+          //     user's Xero login has access to a single (non-Zapply) org.
+          //  3. Multiple orgs with no Zapply match → fail loudly so the user
+          //     picks the right one on retry (this is the case the silent
+          //     "fall back to connections[0]" used to mishandle).
           const allConnections = Array.isArray(connections) ? (connections as any[]) : [];
           const zapplyOrg = allConnections.find((c) =>
             (c.tenantName ?? "").toLowerCase().includes("zapply"),
           );
+          const selectedOrg =
+            zapplyOrg ?? (allConnections.length === 1 ? allConnections[0] : null);
 
-          if (!zapplyOrg) {
+          if (!selectedOrg) {
             const available = allConnections
               .map((c) => c?.tenantName ?? "?")
               .filter(Boolean)
               .join(", ");
-            console.error("[Xero callback] no Zapply tenant found in connections:", available);
+            console.error(
+              "[Xero callback] multiple orgs and no Zapply match — user must reconnect and pick one:",
+              available,
+            );
             return Response.redirect(
               `${appUrl}/?xero_error=wrong_org&detail=${encodeURIComponent(
                 available || "no organizations returned",
@@ -154,8 +163,14 @@ export const Route = createFileRoute("/api/auth/xero/callback")({
             );
           }
 
-          const tenantId = zapplyOrg.tenantId ?? null;
-          const tenantName = zapplyOrg.tenantName ?? "Unknown";
+          if (!zapplyOrg) {
+            console.warn(
+              `[Xero callback] no Zapply tenant in connections — using single available org "${selectedOrg.tenantName}" instead`,
+            );
+          }
+
+          const tenantId = selectedOrg.tenantId ?? null;
+          const tenantName = selectedOrg.tenantName ?? "Unknown";
 
           const expiresAt = new Date(
             Date.now() + ((expires_in ?? 1800) - 60) * 1000,
