@@ -440,6 +440,11 @@ function DailyPnlPage() {
               subtitle={periodKpis.revenueLabel}
               deltaPct={periodKpis.revenuePct}
               positiveIsGood
+              // Shopify "today" provides revenue instantly; only show the
+              // skeleton when there's no Shopify number yet AND TW is still
+              // syncing — otherwise the tile would flicker on every range
+              // change even though we already have a value to display.
+              loading={rangeSyncing && periodKpis.revenue === 0}
             />
             <KpiTile
               icon={TrendingUp}
@@ -448,6 +453,7 @@ function DailyPnlPage() {
               subtitle="Triple Whale net profit (after COGS & ad spend)"
               deltaPct={periodKpis.profitPct}
               positiveIsGood
+              loading={rangeSyncing}
             />
             <KpiTile
               icon={Wallet}
@@ -456,6 +462,7 @@ function DailyPnlPage() {
               subtitle="1h lag"
               deltaPct={periodKpis.adPct}
               positiveIsGood={false}
+              loading={rangeSyncing}
             />
             {(() => {
               const opexTotal = -(
@@ -492,6 +499,7 @@ function DailyPnlPage() {
               subtitle={periodKpis.profitIsLive ? "profit ÷ revenue" : "awaiting Triple Whale"}
               deltaPct={null}
               positiveIsGood
+              loading={rangeSyncing}
             />
           </div>
 
@@ -530,7 +538,9 @@ function DailyPnlPage() {
 
             {/* Selected vs previous-period revenue chart */}
             <div className="mt-4 h-[220px] w-full">
-              {revenueSeries.hasAny ? (
+              {rangeSyncing && !revenueSeries.hasAny ? (
+                <ChartSkeleton />
+              ) : revenueSeries.hasAny ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={revenueSeries.points} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
                     <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
@@ -614,6 +624,23 @@ function SkeletonBox({ className }: { className?: string }) {
         className
       )}
     />
+  );
+}
+
+// Pulsing bar-chart placeholder used while the Triple Whale range query is
+// still in flight. Varied heights keep it from reading as a flat grey block.
+function ChartSkeleton() {
+  const heights = [55, 40, 70, 35, 80, 50, 65, 45, 75, 60, 50, 70, 40, 55, 65, 45, 70, 50, 60, 55, 65, 40, 75, 50];
+  return (
+    <div className="flex h-full items-end gap-1.5">
+      {heights.map((h, i) => (
+        <div
+          key={i}
+          className="flex-1 animate-pulse rounded-t bg-muted/60"
+          style={{ height: `${h}%`, animationDelay: `${(i % 6) * 80}ms` }}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -727,6 +754,7 @@ function KpiTile({
   subtitle,
   deltaPct,
   positiveIsGood,
+  loading = false,
 }: {
   icon: LucideIcon;
   label: string;
@@ -734,43 +762,57 @@ function KpiTile({
   subtitle?: string;
   deltaPct: number | null;
   positiveIsGood: boolean;
+  loading?: boolean;
 }) {
-  const showDelta = deltaPct != null && isFinite(deltaPct);
+  const showDelta = !loading && deltaPct != null && isFinite(deltaPct);
   const isPositive = (deltaPct ?? 0) >= 0;
   const good = positiveIsGood ? isPositive : !isPositive;
   const DeltaArrow = isPositive ? ArrowUpRight : ArrowDownRight;
   return (
     <div className="rounded-xl border bg-card px-5 py-4 shadow-sm">
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-md border bg-muted/40">
               <Icon className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={2} />
             </span>
             <span className="truncate">{label}</span>
           </div>
-          <div className="mt-2 text-[26px] font-bold leading-none tracking-tight">
-            {value}
-          </div>
-          {subtitle && (
-            <div className="mt-1.5 text-[11px] text-muted-foreground">{subtitle}</div>
+          {loading ? (
+            <>
+              <div className="mt-3 h-7 w-32 animate-pulse rounded-md bg-muted/60" />
+              <div className="mt-2 h-3 w-40 animate-pulse rounded bg-muted/50" />
+            </>
+          ) : (
+            <>
+              <div className="mt-2 text-[26px] font-bold leading-none tracking-tight">
+                {value}
+              </div>
+              {subtitle && (
+                <div className="mt-1.5 text-[11px] text-muted-foreground">{subtitle}</div>
+              )}
+            </>
           )}
         </div>
-        {showDelta && (
-          <div
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium whitespace-nowrap",
-              good
-                ? "bg-emerald-50 text-emerald-700"
-                : "bg-red-50 text-red-700"
-            )}
-          >
-            <DeltaArrow className="h-3 w-3" strokeWidth={2.5} aria-hidden />
-            <span>
-              {isPositive ? "+" : ""}
-              {deltaPct!.toFixed(1)}%
-            </span>
-          </div>
+        {loading ? (
+          <div className="h-6 w-12 animate-pulse rounded-md bg-muted/60" />
+        ) : (
+          showDelta && (
+            <div
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium whitespace-nowrap",
+                good
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-red-50 text-red-700"
+              )}
+            >
+              <DeltaArrow className="h-3 w-3" strokeWidth={2.5} aria-hidden />
+              <span>
+                {isPositive ? "+" : ""}
+                {deltaPct!.toFixed(1)}%
+              </span>
+            </div>
+          )
         )}
       </div>
     </div>
