@@ -3985,16 +3985,55 @@ export async function fetchJortt() {
   }
 
   // 6. Bank accounts + transactions — financing:read (v3)
+  // NOTE: Jortt's v3 endpoints use HYPHENS (/v3/bank-accounts), not
+  // underscores. v1 endpoints use underscores (/v1/ledger_accounts/...).
+  // Calling /v3/bank_accounts returns 404 silently — that's why this used
+  // to fall through to the cash_and_bank report fallback every time.
+  //
+  // v3 responses follow JSON:API shape: `{ id, type, attributes: {...} }`.
+  // Flatten to the simple `{ name, balance, currency, id }` the dashboard
+  // already understands so the BankRow component and the per-source merge
+  // in [pillars.balance-sheet.tsx] keep reading the same fields whether
+  // the data came from v3 or from the cash_and_bank fallback below.
   let bankAccounts: any[] = [];
   const bankTransactions: any[] = [];
   if (tokens["financing:read"]) {
     const t = tokens["financing:read"]!;
-    bankAccounts = await jorttPaginate(t, "/v3/bank_accounts", 5);
-    // Pull recent transactions per bank account (cap totals for speed)
+    const raw = await jorttPaginate(t, "/v3/bank-accounts", 5);
+    bankAccounts = raw.map((r: any) => {
+      const attrs = r?.attributes && typeof r.attributes === "object" ? r.attributes : r;
+      const pick = (v: any) => {
+        if (v == null) return null;
+        if (typeof v === "object") return v.value ?? v.amount ?? null;
+        return v;
+      };
+      const balanceRaw =
+        pick(attrs?.current_balance) ??
+        pick(attrs?.balance) ??
+        pick(attrs?.book_balance) ??
+        pick(attrs?.available_balance) ??
+        0;
+      const balance = parseFloat(String(balanceRaw));
+      const currency = String(
+        attrs?.current_balance?.currency ??
+          attrs?.balance?.currency ??
+          attrs?.currency ??
+          "EUR",
+      );
+      return {
+        id: r?.id ?? attrs?.id ?? null,
+        name: String(attrs?.name ?? attrs?.iban ?? attrs?.label ?? "Bank account"),
+        balance: Number.isFinite(balance) ? balance : 0,
+        currency,
+      };
+    });
+    // Pull recent transactions per bank account (cap totals for speed).
+    // Per Jortt's OpenAPI: `/v3/bank-accounts/{id}/bank-transactions` (the
+    // collection sub-path is `bank-transactions`, not `transactions`).
     for (const acct of bankAccounts.slice(0, 5)) {
       const id = acct?.id;
       if (!id) continue;
-      const tx = await jorttPaginate(t, `/v3/bank_accounts/${id}/transactions`, 5);
+      const tx = await jorttPaginate(t, `/v3/bank-accounts/${id}/bank-transactions`, 5);
       bankTransactions.push(...tx.map((x: any) => ({ ...x, _bank_account_id: id })));
     }
   }
@@ -4062,14 +4101,22 @@ export async function fetchJortt() {
   let labels: any[] = [];
   if (tokens["organizations:read"]) {
     const t = tokens["organizations:read"]!;
-    organization = await jorttGet(t, "/v1/organizations");
+    // Per Jortt OpenAPI: the current organisation is /v1/organizations/me,
+    // not /v1/organizations. The latter returns 404 silently.
+    organization = await jorttGet(t, "/v1/organizations/me");
     tradenames = await jorttPaginate(t, "/v1/tradenames", 3);
-    // Pull ledger accounts from BOTH the invoices and expenses endpoints so
-    // we get a full id→category map (Jortt splits them by intent).
-    const [invLedgers, expLedgers] = await Promise.all([
+    // Ledger accounts: Jortt exposes invoices under /v1 but splits the
+    // expense ledger across three v3 sub-paths (cost / income / balance).
+    // The previous /v1/ledger_accounts/expenses returns 404 — that's why
+    // ledgerAccountsCount was 0 and OpEx categorisation fell back to
+    // keyword matching instead of Jortt's native category mapping.
+    const [invLedgers, expCost, expIncome, expBalance] = await Promise.all([
       jorttPaginate(t, "/v1/ledger_accounts/invoices", 5),
-      jorttPaginate(t, "/v1/ledger_accounts/expenses", 10),
+      jorttPaginate(t, "/v3/ledger_accounts/expenses/cost", 5),
+      jorttPaginate(t, "/v3/ledger_accounts/expenses/income", 5),
+      jorttPaginate(t, "/v3/ledger_accounts/expenses/balance", 5),
     ]);
+    const expLedgers = [...expCost, ...expIncome, ...expBalance];
     const seen = new Set<string>();
     ledgerAccounts = [...invLedgers, ...expLedgers].filter((l: any) => {
       const id = String(l?.id ?? "");
