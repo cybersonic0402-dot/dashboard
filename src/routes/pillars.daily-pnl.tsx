@@ -143,6 +143,15 @@ function DailyPnlPage() {
     opexDetail?: Record<string, any>;
   } | null>(null);
   const [shopifyDaily, setShopifyDaily] = useState<{ daily?: Record<string, { revenue?: number }> } | null>(null);
+  // Triple Whale's per-day aggregated cache. Used as a fallback for short
+  // ranges (today / yesterday) where the live `getTripleWhaleRange` call
+  // routinely comes back with revenue but null/0 for adSpend, grossProfit,
+  // and netProfit — TW's ad-pipeline metrics lag the orders pipeline by an
+  // hour or so, but the nightly daily-cache already has them for every
+  // completed day plus a partial bucket for today.
+  const [twDaily, setTwDaily] = useState<{
+    daily?: Record<string, { revenue?: number; adSpend?: number; grossProfit?: number; netProfit?: number }>;
+  } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -160,6 +169,7 @@ function DailyPnlPage() {
         const xero = d?.xero && typeof d.xero === "object" && !d.xero.__empty && !d.xero.__error ? d.xero : null;
         setXeroData(xero);
         setShopifyDaily(d?.shopifyDaily ?? null);
+        setTwDaily(d?.tripleWhaleDaily ?? null);
         setSyncedAt(d?.syncedAt ?? null);
       })
       .finally(() => alive && setLoading(false));
@@ -204,18 +214,66 @@ function DailyPnlPage() {
     const hasField = (arr: TwRow[], k: string) =>
       arr.some((r: any) => typeof r?.[k] === "number");
 
+    // Sum the per-day TW aggregate cache for every date inside [from, to].
+    // Returns null when the cache has no usable data in the window so the
+    // caller can decide whether to fall through to other sources.
+    const sumDaily = (
+      from: string,
+      to: string,
+      k: "revenue" | "adSpend" | "grossProfit" | "netProfit",
+    ): number | null => {
+      const daily = twDaily?.daily ?? null;
+      if (!daily || typeof daily !== "object") return null;
+      const start = new Date(from + "T00:00:00Z");
+      const end = new Date(to + "T00:00:00Z");
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+      let sum = 0;
+      let any = false;
+      for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+        const key = fmtIso(d);
+        const row: any = (daily as any)[key];
+        const v = typeof row?.[k] === "number" ? row[k] : null;
+        if (v != null) {
+          sum += v;
+          any = true;
+        }
+      }
+      return any ? sum : null;
+    };
+
     const twRevenue = sumTw(twRange, "revenue");
-    const adSpend = sumTw(twRange, "adSpend");
-    const grossProfit = sumTw(twRange, "grossProfit");
-    const twNetProfit = hasField(twRange, "netProfit")
+    // Each of adSpend / grossProfit / netProfit prefers the live TW range
+    // call (returns higher fidelity per-market data) but transparently
+    // falls back to the per-day TW cache aggregate when the live call
+    // returned nothing — which is what happens for the today/yesterday
+    // windows the user was hitting empty before.
+    const liveAdSpend = sumTw(twRange, "adSpend");
+    const liveGrossProfit = sumTw(twRange, "grossProfit");
+    const liveTwNetProfit = hasField(twRange, "netProfit")
       ? sumTw(twRange, "netProfit")
       : null;
+    const adSpend =
+      liveAdSpend !== 0
+        ? liveAdSpend
+        : (sumDaily(dateRange.from, dateRange.to, "adSpend") ?? 0);
+    const grossProfit =
+      liveGrossProfit !== 0
+        ? liveGrossProfit
+        : (sumDaily(dateRange.from, dateRange.to, "grossProfit") ?? 0);
+    const twNetProfit =
+      liveTwNetProfit != null
+        ? liveTwNetProfit
+        : sumDaily(dateRange.from, dateRange.to, "netProfit");
 
     // Revenue: when range is exactly "today", prefer real-time Shopify totals
     let revenue = twRevenue;
     if (isToday) {
       const shopRev = sumRev(today);
       if (shopRev > 0) revenue = shopRev;
+    }
+    if (revenue === 0) {
+      const dailyRev = sumDaily(dateRange.from, dateRange.to, "revenue");
+      if (dailyRev != null) revenue = dailyRev;
     }
 
     const profit =
@@ -229,10 +287,17 @@ function DailyPnlPage() {
       revenue > 0 && profit != null ? (profit / revenue) * 100 : null;
 
     // Comparison baseline = same-length window immediately before the selection
-    const baseRev = sumTw(twBase, "revenue");
-    const baseAd = sumTw(twBase, "adSpend");
-    const baseGp = sumTw(twBase, "grossProfit");
-    const baseNp = hasField(twBase, "netProfit") ? sumTw(twBase, "netProfit") : null;
+    const base = baselineRange(dateRange.from, dateRange.to);
+    const baseRev =
+      sumTw(twBase, "revenue") || (sumDaily(base.from, base.to, "revenue") ?? 0);
+    const baseAd =
+      sumTw(twBase, "adSpend") || (sumDaily(base.from, base.to, "adSpend") ?? 0);
+    const baseGp =
+      sumTw(twBase, "grossProfit") ||
+      (sumDaily(base.from, base.to, "grossProfit") ?? 0);
+    const baseNp = hasField(twBase, "netProfit")
+      ? sumTw(twBase, "netProfit")
+      : sumDaily(base.from, base.to, "netProfit");
     const baseProfit = baseNp != null ? baseNp : baseGp - baseAd;
     const hasBaseline = baseRev > 0;
     const baseRevenueLabel = hasBaseline
@@ -254,7 +319,7 @@ function DailyPnlPage() {
       cmDeltaPp: null as number | null,
       revenueLabel: baseRevenueLabel,
     };
-  }, [today, twRange, twBase, isToday]);
+  }, [today, twRange, twBase, twDaily, isToday, dateRange.from, dateRange.to]);
 
   // ---- Daily revenue series for the strip chart (selected vs previous period) ----
   const revenueSeries = useMemo(() => {
