@@ -725,11 +725,11 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
   const [chartsReady, setChartsReady] = useState(false);
   const [showRevenueBreakdown, setShowRevenueBreakdown] = useState(false);
   const [showRevProfitChart, setShowRevProfitChart] = useState(false);
-  // Independent cohort-window filters for the Subscriptions card and the
-  // Repeat purchase funnel card. Default ALL = no filter, matching the
-  // existing behaviour exactly when the user hasn't picked a range.
+  // Shared cohort-window filter for the Subscriptions card AND the Repeat
+  // purchase funnel card — both surface cohort-based data, so a single
+  // picker drives both. The filter UI lives in the Subscriptions header.
+  // Default ALL = no filter, matching the existing behaviour exactly.
   const [subsRange, setSubsRange] = useState<string>("all");
-  const [funnelRange, setFunnelRange] = useState<string>("all");
   useEffect(() => { setChartsReady(true); }, []);
 
   // When a custom-range sync has returned data, use it in place of the live props
@@ -1902,17 +1902,18 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
     {/* Repeat Purchase Funnel — real Shopify cohort data */}
     {shopifyRepeatFunnel && (() => {
       const f = shopifyRepeatFunnel;
-      // Apply the funnel-section filter. When ALL is selected we keep the
-      // server-supplied lifetime cohort + funnel intact (existing behaviour).
-      // For windowed selections we restrict the monthlyCohorts table to the
-      // chosen window and recompute the headline funnel by size-weighted
-      // averaging of those cohorts' per-order percentages. The lifetime
-      // server number is also exposed for context.
-      const isFunnelAll = funnelRange === "all";
+      // Use the SAME `subsRange` filter as the Subscriptions card above —
+      // both sections show cohort-based data and one picker drives both.
+      // When ALL is selected we keep the server-supplied lifetime cohort +
+      // funnel intact (existing behaviour). For windowed selections we
+      // restrict the monthlyCohorts table to the chosen window and recompute
+      // the headline funnel by size-weighted averaging of those cohorts'
+      // per-order percentages.
+      const isFunnelAll = subsRange === "all";
       const allMonthlyCohorts: any[] = Array.isArray(f.monthlyCohorts) ? f.monthlyCohorts : [];
       const filteredCohorts = isFunnelAll
         ? allMonthlyCohorts
-        : filterMonthlyCohorts(allMonthlyCohorts, funnelRange);
+        : filterMonthlyCohorts(allMonthlyCohorts, subsRange);
       const filteredCohortSize = filteredCohorts.reduce((s, c) => s + (c?.size ?? 0), 0);
       const fallbackCohort = (allMonthlyCohorts).find((c: any) => (c.size ?? 0) > 0) ?? null;
       const lifetimeCohortSize = (f.cohortSize ?? 0) > 0 ? f.cohortSize : (fallbackCohort?.size ?? 0);
@@ -1981,22 +1982,14 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
                   : "Loading customer history…"}
               </div>
             </div>
-            <div className="flex items-start gap-4 flex-wrap">
-              <div>
-                <div className="text-[10px] font-medium uppercase tracking-wider text-neutral-400 mb-1">
-                  Cohort window
-                </div>
-                <CohortRangeFilter value={funnelRange} onChange={setFunnelRange} />
-              </div>
-              <div className="text-right text-[11px] text-neutral-400">
-                Cohort size: <span className="font-semibold text-neutral-700">{cohortSize.toLocaleString()} {f.source === "subscriptions" ? "subscribers" : "first-time buyers"}</span>
-                {!isFunnelAll && (
-                  <div className="mt-1">Lifetime: {lifetimeCohortSize.toLocaleString()}</div>
-                )}
-                {f.sourceStart && f.sourceEnd && (
-                  <div className="mt-1">Source: {f.source === "subscriptions" ? `${(f.sources ?? ["Juo", "Loop"]).join(" + ")} subscriptions` : "Shopify orders"} {f.sourceStart}–{f.sourceEnd}</div>
-                )}
-              </div>
+            <div className="text-right text-[11px] text-neutral-400">
+              Cohort size: <span className="font-semibold text-neutral-700">{cohortSize.toLocaleString()} {f.source === "subscriptions" ? "subscribers" : "first-time buyers"}</span>
+              {!isFunnelAll && (
+                <div className="mt-1">Lifetime: {lifetimeCohortSize.toLocaleString()}</div>
+              )}
+              {f.sourceStart && f.sourceEnd && (
+                <div className="mt-1">Source: {f.source === "subscriptions" ? `${(f.sources ?? ["Juo", "Loop"]).join(" + ")} subscriptions` : "Shopify orders"} {f.sourceStart}–{f.sourceEnd}</div>
+              )}
             </div>
           </div>
 
