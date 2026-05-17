@@ -648,10 +648,88 @@ const TodaysProfitCard = ({ metrics, chartsReady }: any) => {
    VIEW: OVERVIEW
    ========================================================================= */
 
+// Cohort window options for the per-section filters in Subscriptions and the
+// Repeat purchase funnel. `monthsBack: null` = no filter (show everything).
+// Used by `<CohortRangeFilter>` and `filterMonthlyCohorts()` below.
+const COHORT_RANGES: Array<{ key: string; label: string; monthsBack: number | null }> = [
+  { key: "all", label: "ALL", monthsBack: null },
+  { key: "1w", label: "Last week", monthsBack: 1 },
+  { key: "1m", label: "Last month", monthsBack: 1 },
+  { key: "3m", label: "Last 3 months", monthsBack: 3 },
+  { key: "6m", label: "Last 6 months", monthsBack: 6 },
+];
+
+function CohortRangeFilter({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <div className="inline-flex flex-wrap gap-1 rounded-md border border-neutral-200 bg-white p-0.5">
+      {COHORT_RANGES.map((r) => {
+        const active = r.key === value;
+        return (
+          <button
+            key={r.key}
+            type="button"
+            onClick={() => onChange(r.key)}
+            className={`rounded px-2 py-1 text-[11px] font-medium transition ${
+              active
+                ? "bg-neutral-900 text-white"
+                : "text-neutral-500 hover:bg-neutral-50 hover:text-neutral-700"
+            }`}
+          >
+            {r.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Cohort month keys ship in either `YYYY-MM` or `MMM 'YY` form. Normalize and
+// compare against a "now − N months" cutoff. `1w` is approximated as the
+// current month only since cohorts are bucketed monthly.
+function filterMonthlyCohorts<T extends { month?: string }>(
+  cohorts: T[] | null | undefined,
+  rangeKey: string,
+): T[] {
+  if (!Array.isArray(cohorts)) return [];
+  const spec = COHORT_RANGES.find((r) => r.key === rangeKey);
+  if (!spec || spec.monthsBack == null) return cohorts;
+  const now = new Date();
+  const monthsAgo = new Date(now.getFullYear(), now.getMonth() - (spec.monthsBack - 1), 1);
+  const parseMonth = (m: string | undefined): Date | null => {
+    if (!m) return null;
+    // YYYY-MM
+    const iso = m.match(/^(\d{4})-(\d{2})$/);
+    if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, 1);
+    // "MMM 'YY"  e.g. "Apr '26"
+    const named = m.match(/^([A-Za-z]{3})\s+'(\d{2})$/);
+    if (named) {
+      const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+      const mi = months.indexOf(named[1].toLowerCase());
+      if (mi >= 0) return new Date(2000 + Number(named[2]), mi, 1);
+    }
+    return null;
+  };
+  return cohorts.filter((c) => {
+    const d = parseMonth(c.month);
+    return d != null && d >= monthsAgo;
+  });
+}
+
 export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twData = [], subData: subDataProp = [], shopifyMonthly = null, jorttData = null, xeroData = null, xeroError = null, xeroRaw = null, rangeData = null, rangeSyncing = false, shopifyDaily = null, tripleWhaleDaily = null, tripleWhaleCustomerEconomics = null, shopifyRepeatFunnel = null, sourceStatus = null, manualData = null }: any) => {
   const [chartsReady, setChartsReady] = useState(false);
   const [showRevenueBreakdown, setShowRevenueBreakdown] = useState(false);
   const [showRevProfitChart, setShowRevProfitChart] = useState(false);
+  // Independent cohort-window filters for the Subscriptions card and the
+  // Repeat purchase funnel card. Default ALL = no filter, matching the
+  // existing behaviour exactly when the user hasn't picked a range.
+  const [subsRange, setSubsRange] = useState<string>("all");
+  const [funnelRange, setFunnelRange] = useState<string>("all");
   useEffect(() => { setChartsReady(true); }, []);
 
   // When a custom-range sync has returned data, use it in place of the live props
@@ -1607,7 +1685,7 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
       const sourcesLabel = subData.map(m => m.platform === "juo" ? `Juo (${m.market})` : `Loop (${m.market})`).join(" + ");
       return (
         <Card className="mt-3 p-5">
-          <div className="flex items-start justify-between mb-5">
+          <div className="flex items-start justify-between mb-5 gap-3 flex-wrap">
             <div className="flex items-start gap-2.5">
               <div className="flex h-7 w-7 items-center justify-center rounded-md bg-violet-100">
                 <Sparkles className="h-3.5 w-3.5 text-violet-600" />
@@ -1620,13 +1698,21 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
                 <div className="mt-0.5 text-[12px] text-neutral-500">MRR, active subscribers, churn · source: {sourcesLabel}</div>
               </div>
             </div>
-            {subShare !== null && (
-              <div className="text-right">
-                <div className="text-[10px] font-medium uppercase tracking-wider text-neutral-400">Subscription share</div>
-                <div className="mt-0.5 text-[20px] font-semibold tabular-nums">{subShare.toFixed(1)}%</div>
-                <div className="text-[11px] text-neutral-400">Of total revenue</div>
+            <div className="flex items-start gap-4 flex-wrap">
+              <div>
+                <div className="text-[10px] font-medium uppercase tracking-wider text-neutral-400 mb-1">
+                  Cohort window
+                </div>
+                <CohortRangeFilter value={subsRange} onChange={setSubsRange} />
               </div>
-            )}
+              {subShare !== null && (
+                <div className="text-right">
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-neutral-400">Subscription share</div>
+                  <div className="mt-0.5 text-[20px] font-semibold tabular-nums">{subShare.toFixed(1)}%</div>
+                  <div className="text-[11px] text-neutral-400">Of total revenue</div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5 border-t border-neutral-100 pt-5">
@@ -1649,12 +1735,32 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
             </div>
             {(() => {
               const f: any = shopifyRepeatFunnel;
-              const thirdRow = f?.funnel?.[2];
-              const rate: number | null = (f?.cohortSize ?? 0) > 0 ? (thirdRow?.rate ?? null) : null;
-              // Compute delta vs prior mature cohort (first non-maturing cohort that is not the latest mature one)
-              const mature = (f?.monthlyCohorts ?? []).filter((c: any) => !c.maturing && c.third !== null);
-              const latest = mature[0];
-              const prior = mature[1];
+              // When the user filters to a recent window, use only the
+              // monthly cohorts that fall in it for both the headline rate
+              // and the delta. The headline becomes the weighted average of
+              // third-order rates across those filtered cohorts; the lifetime
+              // funnel rate is shown when ALL is selected so the existing
+              // behaviour is preserved exactly.
+              const isAll = subsRange === "all";
+              const filteredCohorts = filterMonthlyCohorts(f?.monthlyCohorts, subsRange);
+              const matureFiltered = filteredCohorts.filter(
+                (c: any) => !c.maturing && c.third !== null,
+              );
+              const weightedRate = (() => {
+                if (matureFiltered.length === 0) return null;
+                const totalSize = matureFiltered.reduce((s: number, c: any) => s + (c.size ?? 0), 0);
+                if (totalSize <= 0) return null;
+                const sumReached = matureFiltered.reduce(
+                  (s: number, c: any) => s + ((c.third ?? 0) / 100) * (c.size ?? 0),
+                  0,
+                );
+                return (sumReached / totalSize) * 100;
+              })();
+              const lifetimeRate: number | null =
+                (f?.cohortSize ?? 0) > 0 ? (f?.funnel?.[2]?.rate ?? null) : null;
+              const rate = isAll ? lifetimeRate : weightedRate;
+              const latest = matureFiltered[0];
+              const prior = matureFiltered[1];
               const delta = latest && prior ? latest.third - prior.third : null;
               return (
                 <div className="border-t border-neutral-100 pt-5 md:border-t-0 md:pt-0">
@@ -1669,12 +1775,18 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
                           </div>
                         )}
                       </div>
-                      <div className="mt-1 text-[11px] text-neutral-400">Of first-time buyers</div>
+                      <div className="mt-1 text-[11px] text-neutral-400">
+                        {isAll
+                          ? "Of first-time buyers · lifetime"
+                          : `Avg across ${matureFiltered.length} cohort${matureFiltered.length === 1 ? "" : "s"} in window`}
+                      </div>
                     </>
                   ) : (
                     <>
                       <div className="mt-1 text-[26px] font-semibold tabular-nums leading-none text-neutral-400">—</div>
-                      <div className="mt-1 text-[11px] text-neutral-400">Cohort still maturing</div>
+                      <div className="mt-1 text-[11px] text-neutral-400">
+                        {isAll ? "Cohort still maturing" : "No mature cohorts in window"}
+                      </div>
                     </>
                   )}
                 </div>
@@ -1790,45 +1902,101 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
     {/* Repeat Purchase Funnel — real Shopify cohort data */}
     {shopifyRepeatFunnel && (() => {
       const f = shopifyRepeatFunnel;
-      const fallbackCohort = (f.monthlyCohorts ?? []).find((c: any) => (c.size ?? 0) > 0) ?? null;
-      const cohortSize = (f.cohortSize ?? 0) > 0 ? f.cohortSize : (fallbackCohort?.size ?? 0);
+      // Apply the funnel-section filter. When ALL is selected we keep the
+      // server-supplied lifetime cohort + funnel intact (existing behaviour).
+      // For windowed selections we restrict the monthlyCohorts table to the
+      // chosen window and recompute the headline funnel by size-weighted
+      // averaging of those cohorts' per-order percentages. The lifetime
+      // server number is also exposed for context.
+      const isFunnelAll = funnelRange === "all";
+      const allMonthlyCohorts: any[] = Array.isArray(f.monthlyCohorts) ? f.monthlyCohorts : [];
+      const filteredCohorts = isFunnelAll
+        ? allMonthlyCohorts
+        : filterMonthlyCohorts(allMonthlyCohorts, funnelRange);
+      const filteredCohortSize = filteredCohorts.reduce((s, c) => s + (c?.size ?? 0), 0);
+      const fallbackCohort = (allMonthlyCohorts).find((c: any) => (c.size ?? 0) > 0) ?? null;
+      const lifetimeCohortSize = (f.cohortSize ?? 0) > 0 ? f.cohortSize : (fallbackCohort?.size ?? 0);
+      const cohortSize = isFunnelAll ? lifetimeCohortSize : filteredCohortSize;
       const hasCohort = cohortSize > 0;
       const orderColors = ["bg-neutral-900", "bg-violet-500", "bg-violet-400", "bg-violet-300", "bg-violet-200", "bg-violet-200", "bg-violet-100"];
       const orderDotColors = ["bg-neutral-900", "bg-violet-500", "bg-violet-400", "bg-violet-300", "bg-violet-200", "bg-violet-200", "bg-violet-100"];
       const labels = ["1st order", "2nd order", "3rd order", "4th order", "5th order", "6th order", "7th+ orders"];
       const subs = ["First purchase", "Repeat to 2nd", "Repeat to 3rd", "Repeat to 4th", "Repeat to 5th", "Repeat to 6th", "Repeat to 7th+"];
       const fallbackFunnel = fallbackCohort ? [
-        { order: 1, customers: cohortSize, rate: 100, maturing: false },
-        { order: 2, customers: fallbackCohort.second !== null ? Math.round(cohortSize * fallbackCohort.second / 100) : null, rate: fallbackCohort.second, maturing: fallbackCohort.second === null },
-        { order: 3, customers: fallbackCohort.third !== null ? Math.round(cohortSize * fallbackCohort.third / 100) : null, rate: fallbackCohort.third, maturing: fallbackCohort.third === null },
-        { order: 4, customers: fallbackCohort.fourth !== null ? Math.round(cohortSize * fallbackCohort.fourth / 100) : null, rate: fallbackCohort.fourth, maturing: fallbackCohort.fourth === null },
+        { order: 1, customers: lifetimeCohortSize, rate: 100, maturing: false },
+        { order: 2, customers: fallbackCohort.second !== null ? Math.round(lifetimeCohortSize * fallbackCohort.second / 100) : null, rate: fallbackCohort.second, maturing: fallbackCohort.second === null },
+        { order: 3, customers: fallbackCohort.third !== null ? Math.round(lifetimeCohortSize * fallbackCohort.third / 100) : null, rate: fallbackCohort.third, maturing: fallbackCohort.third === null },
+        { order: 4, customers: fallbackCohort.fourth !== null ? Math.round(lifetimeCohortSize * fallbackCohort.fourth / 100) : null, rate: fallbackCohort.fourth, maturing: fallbackCohort.fourth === null },
         { order: 5, customers: null, rate: null, maturing: true },
         { order: 6, customers: null, rate: null, maturing: true },
         { order: 7, customers: null, rate: null, maturing: true },
       ] : [];
-      const displayFunnel = (f.cohortSize ?? 0) > 0 ? f.funnel : fallbackFunnel;
+      // Build a "filtered" funnel by size-weighting per-order rates across the
+      // cohorts visible in the window. Only `second`/`third`/`fourth` exist on
+      // each monthlyCohort, so orders 5–7 stay maturing in windowed mode.
+      const buildWeightedFunnel = () => {
+        if (filteredCohorts.length === 0 || filteredCohortSize === 0) return [];
+        const weightedPct = (key: "second" | "third" | "fourth") => {
+          const eligible = filteredCohorts.filter((c) => c?.[key] != null);
+          const totalEligibleSize = eligible.reduce((s, c) => s + (c.size ?? 0), 0);
+          if (totalEligibleSize === 0) return null;
+          const reached = eligible.reduce(
+            (s, c) => s + ((c[key] as number) / 100) * (c.size ?? 0),
+            0,
+          );
+          return (reached / totalEligibleSize) * 100;
+        };
+        const p2 = weightedPct("second");
+        const p3 = weightedPct("third");
+        const p4 = weightedPct("fourth");
+        return [
+          { order: 1, customers: filteredCohortSize, rate: 100, rateMature: 100, matureSize: filteredCohortSize, maturityPct: 100, maturing: false },
+          { order: 2, customers: p2 != null ? Math.round(filteredCohortSize * p2 / 100) : null, rate: p2, rateMature: p2, matureSize: filteredCohortSize, maturityPct: 100, maturing: p2 == null },
+          { order: 3, customers: p3 != null ? Math.round(filteredCohortSize * p3 / 100) : null, rate: p3, rateMature: p3, matureSize: filteredCohortSize, maturityPct: 100, maturing: p3 == null },
+          { order: 4, customers: p4 != null ? Math.round(filteredCohortSize * p4 / 100) : null, rate: p4, rateMature: p4, matureSize: filteredCohortSize, maturityPct: 100, maturing: p4 == null },
+          { order: 5, customers: null, rate: null, rateMature: null, matureSize: 0, maturityPct: 0, maturing: true },
+          { order: 6, customers: null, rate: null, rateMature: null, matureSize: 0, maturityPct: 0, maturing: true },
+          { order: 7, customers: null, rate: null, rateMature: null, matureSize: 0, maturityPct: 0, maturing: true },
+        ];
+      };
+      const displayFunnel = isFunnelAll
+        ? ((f.cohortSize ?? 0) > 0 ? f.funnel : fallbackFunnel)
+        : buildWeightedFunnel();
       const personLabel = f.source === "subscriptions" ? "subscribers" : "customers";
       // (deeper analysis is always rendered for accuracy)
       const top4 = displayFunnel.slice(0, 4);
       const rest = displayFunnel.slice(4);
       return (
         <Card className="mt-3 p-5">
-          <div className="flex items-start justify-between mb-1">
+          <div className="flex items-start justify-between mb-1 gap-3 flex-wrap">
             <div>
               <div className="text-[14px] font-semibold">Repeat purchase funnel</div>
               <div className="mt-0.5 text-[12px] text-neutral-500">
                 {hasCohort
-                  ? (f.source === "subscriptions"
-                      ? `Lifetime subscribers across ${(f.sources ?? ["Juo NL", "Loop UK", "Loop US"]).join(" + ")} cohorts${f.sourceStart && f.sourceEnd ? ` · ${f.sourceStart}–${f.sourceEnd}` : ""}`
-                      : `Lifetime first-time buyers across all Shopify cohorts${f.sourceStart && f.sourceEnd ? ` · ${f.sourceStart}–${f.sourceEnd}` : ""}`)
+                  ? isFunnelAll
+                    ? (f.source === "subscriptions"
+                        ? `Lifetime subscribers across ${(f.sources ?? ["Juo NL", "Loop UK", "Loop US"]).join(" + ")} cohorts${f.sourceStart && f.sourceEnd ? ` · ${f.sourceStart}–${f.sourceEnd}` : ""}`
+                        : `Lifetime first-time buyers across all Shopify cohorts${f.sourceStart && f.sourceEnd ? ` · ${f.sourceStart}–${f.sourceEnd}` : ""}`)
+                    : `Size-weighted across ${filteredCohorts.length} cohort${filteredCohorts.length === 1 ? "" : "s"} in the selected window`
                   : "Loading customer history…"}
               </div>
             </div>
-            <div className="text-right text-[11px] text-neutral-400">
-              Cohort size: <span className="font-semibold text-neutral-700">{cohortSize.toLocaleString()} {f.source === "subscriptions" ? "subscribers" : "first-time buyers"}</span>
-              {f.sourceStart && f.sourceEnd && (
-                <div className="mt-1">Source: {f.source === "subscriptions" ? `${(f.sources ?? ["Juo", "Loop"]).join(" + ")} subscriptions` : "Shopify orders"} {f.sourceStart}–{f.sourceEnd}</div>
-              )}
+            <div className="flex items-start gap-4 flex-wrap">
+              <div>
+                <div className="text-[10px] font-medium uppercase tracking-wider text-neutral-400 mb-1">
+                  Cohort window
+                </div>
+                <CohortRangeFilter value={funnelRange} onChange={setFunnelRange} />
+              </div>
+              <div className="text-right text-[11px] text-neutral-400">
+                Cohort size: <span className="font-semibold text-neutral-700">{cohortSize.toLocaleString()} {f.source === "subscriptions" ? "subscribers" : "first-time buyers"}</span>
+                {!isFunnelAll && (
+                  <div className="mt-1">Lifetime: {lifetimeCohortSize.toLocaleString()}</div>
+                )}
+                {f.sourceStart && f.sourceEnd && (
+                  <div className="mt-1">Source: {f.source === "subscriptions" ? `${(f.sources ?? ["Juo", "Loop"]).join(" + ")} subscriptions` : "Shopify orders"} {f.sourceStart}–{f.sourceEnd}</div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1883,11 +2051,15 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
             </div>
           )}
 
-          {(hasCohort || (f.monthlyCohorts && f.monthlyCohorts.length > 0)) && (
+          {(hasCohort || (filteredCohorts && filteredCohorts.length > 0)) && (
             <div className="mt-4 rounded-lg border border-neutral-200">
               <div className="flex items-center justify-between p-3 border-b border-neutral-100">
                 <div className="text-[12px] font-semibold text-neutral-700">Deeper cohort analysis</div>
-                <div className="text-[11px] text-neutral-400">5th+ orders, cohort-by-cohort, LTV projection</div>
+                <div className="text-[11px] text-neutral-400">
+                  {isFunnelAll
+                    ? "5th+ orders, cohort-by-cohort, LTV projection"
+                    : `${filteredCohorts.length} cohort${filteredCohorts.length === 1 ? "" : "s"} in window`}
+                </div>
               </div>
               {hasCohort && <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3">
                 {rest.map((row: any, i: number) => {
@@ -1925,7 +2097,7 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
               </div>}
 
               {/* Monthly cohort table */}
-              {f.monthlyCohorts && f.monthlyCohorts.length > 0 && (
+              {filteredCohorts && filteredCohorts.length > 0 ? (
                 <div className="border-t border-neutral-100">
                   <table className="w-full text-[12px]">
                     <thead>
@@ -1939,7 +2111,7 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
                       </tr>
                     </thead>
                     <tbody>
-                      {f.monthlyCohorts.map((c: any, i: number) => (
+                      {filteredCohorts.map((c: any) => (
                         <tr key={c.month} className={`border-t border-neutral-100 ${c.maturing ? "bg-amber-50/40" : ""}`}>
                           <td className="px-4 py-2.5">
                             {c.month}
@@ -1958,6 +2130,12 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
                     ⓘ Cohorts need at least 90 days to fully mature for 3rd/4th order data.
                   </div>
                 </div>
+              ) : (
+                !isFunnelAll && (
+                  <div className="border-t border-neutral-100 px-4 py-6 text-center text-[12px] text-neutral-400">
+                    No cohorts fall in the selected window.
+                  </div>
+                )
               )}
             </div>
           )}
