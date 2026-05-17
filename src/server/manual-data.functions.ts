@@ -3,76 +3,11 @@ import { requireAllowedUser } from "./auth.middleware";
 import { z } from "zod";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
-// ───────── Cash positions ─────────
-export const listCashPositions = createServerFn({ method: "GET" }).middleware([requireAllowedUser]).handler(async () => {
-  const { data, error } = await supabaseAdmin
-    .from("cash_positions")
-    .select("*")
-    .order("account_name", { ascending: true });
-  if (error) throw new Error(error.message);
-  return data ?? [];
-});
-
-const cashSchema = z.object({
-  id: z.string().uuid().optional(),
-  account_name: z.string().min(1).max(120),
-  account_type: z.string().min(1).max(40),
-  currency: z.string().min(3).max(3),
-  balance_eur: z.number(),
-  notes: z.string().max(500).nullable().optional(),
-});
-
-export const upsertCashPosition = createServerFn({ method: "POST" }).middleware([requireAllowedUser])
-  .inputValidator((d: unknown) => cashSchema.parse(d))
-  .handler(async ({ data }) => {
-    const { error } = await supabaseAdmin.from("cash_positions").upsert(data);
-    if (error) throw new Error(error.message);
-    return { ok: true };
-  });
-
-export const deleteCashPosition = createServerFn({ method: "POST" }).middleware([requireAllowedUser])
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
-  .handler(async ({ data }) => {
-    const { error } = await supabaseAdmin.from("cash_positions").delete().eq("id", data.id);
-    if (error) throw new Error(error.message);
-    return { ok: true };
-  });
-
-// ───────── Inventory positions ─────────
-export const listInventoryPositions = createServerFn({ method: "GET" }).middleware([requireAllowedUser]).handler(async () => {
-  const { data, error } = await supabaseAdmin
-    .from("inventory_positions")
-    .select("*")
-    .order("name", { ascending: true });
-  if (error) throw new Error(error.message);
-  return data ?? [];
-});
-
-const invSchema = z.object({
-  id: z.string().uuid().optional(),
-  sku: z.string().min(1).max(80),
-  name: z.string().min(1).max(160),
-  location: z.string().min(1).max(20),
-  pieces: z.number(),
-  unit_cost_eur: z.number(),
-  notes: z.string().max(500).nullable().optional(),
-});
-
-export const upsertInventoryPosition = createServerFn({ method: "POST" }).middleware([requireAllowedUser])
-  .inputValidator((d: unknown) => invSchema.parse(d))
-  .handler(async ({ data }) => {
-    const { error } = await supabaseAdmin.from("inventory_positions").upsert(data);
-    if (error) throw new Error(error.message);
-    return { ok: true };
-  });
-
-export const deleteInventoryPosition = createServerFn({ method: "POST" }).middleware([requireAllowedUser])
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
-  .handler(async ({ data }) => {
-    const { error } = await supabaseAdmin.from("inventory_positions").delete().eq("id", data.id);
-    if (error) throw new Error(error.message);
-    return { ok: true };
-  });
+// Manual cash_positions / inventory_positions were retired — the dashboard
+// now sources cash from Xero + bank platforms and inventory from Picqer. The
+// /admin/manual-data page that fed those tables was removed in the same
+// change. Only app_settings remains here (min_cash_buffer_eur, market_costs)
+// because nothing else owns user-editable configuration yet.
 
 // ───────── App settings ─────────
 export const getAppSettings = createServerFn({ method: "GET" }).middleware([requireAllowedUser]).handler(async () => {
@@ -96,17 +31,16 @@ export const setAppSetting = createServerFn({ method: "POST" }).middleware([requ
   });
 
 // ───────── Combined snapshot for dashboards ─────────
+// Returns only app_settings now. Existing consumers read `settings.*` from
+// this; the empty cashPositions / inventoryPositions arrays keep older
+// destructuring sites safe until they're cleaned up.
 export const getManualDataSnapshot = createServerFn({ method: "GET" }).middleware([requireAllowedUser]).handler(async () => {
-  const [cash, inv, settings] = await Promise.all([
-    supabaseAdmin.from("cash_positions").select("*"),
-    supabaseAdmin.from("inventory_positions").select("*"),
-    supabaseAdmin.from("app_settings").select("*"),
-  ]);
+  const { data: settings } = await supabaseAdmin.from("app_settings").select("*");
   const settingsMap: Record<string, any> = {};
-  for (const r of settings.data ?? []) settingsMap[r.key] = r.value;
+  for (const r of settings ?? []) settingsMap[r.key] = r.value;
   return {
-    cashPositions: cash.data ?? [],
-    inventoryPositions: inv.data ?? [],
+    cashPositions: [] as any[],
+    inventoryPositions: [] as any[],
     settings: settingsMap,
   };
 });

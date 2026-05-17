@@ -131,46 +131,36 @@ export const Route = createFileRoute("/api/auth/xero/callback")({
           const connections = connRes.ok ? await connRes.json() : [];
           console.log("[Xero callback] connections count:", Array.isArray(connections) ? connections.length : 0);
 
-          // Org selection rules:
-          //  1. Prefer any connection whose name contains "zapply".
-          //  2. If there's only one connection, just use it — refusing here
-          //     would leave the dashboard with no Xero data at all when the
-          //     user's Xero login has access to a single (non-Zapply) org.
-          //  3. Multiple orgs with no Zapply match → fail loudly so the user
-          //     picks the right one on retry (this is the case the silent
-          //     "fall back to connections[0]" used to mishandle).
+          // Org selection: ONLY accept a Zapply organisation. Never fall back
+          // to "first available" or "the only one" — when the user's Xero
+          // login only sees Demo Company (Global) (e.g. Zapply NL trial
+          // expired and Xero auto-grants Demo access), the previous "use the
+          // only org" fallback silently pulled Demo Company numbers into the
+          // dashboard. Better to surface no Xero data than wrong Xero data.
           const allConnections = Array.isArray(connections) ? (connections as any[]) : [];
           const zapplyOrg = allConnections.find((c) =>
             (c.tenantName ?? "").toLowerCase().includes("zapply"),
           );
-          const selectedOrg =
-            zapplyOrg ?? (allConnections.length === 1 ? allConnections[0] : null);
 
-          if (!selectedOrg) {
+          if (!zapplyOrg) {
             const available = allConnections
               .map((c) => c?.tenantName ?? "?")
               .filter(Boolean)
               .join(", ");
             console.error(
-              "[Xero callback] multiple orgs and no Zapply match — user must reconnect and pick one:",
+              "[Xero callback] no Zapply tenant available — refusing to connect a non-Zapply org:",
               available,
             );
             return Response.redirect(
-              `${appUrl}/?xero_error=wrong_org&detail=${encodeURIComponent(
+              `${appUrl}/?xero_error=no_zapply_org&detail=${encodeURIComponent(
                 available || "no organizations returned",
               )}`,
               302,
             );
           }
 
-          if (!zapplyOrg) {
-            console.warn(
-              `[Xero callback] no Zapply tenant in connections — using single available org "${selectedOrg.tenantName}" instead`,
-            );
-          }
-
-          const tenantId = selectedOrg.tenantId ?? null;
-          const tenantName = selectedOrg.tenantName ?? "Unknown";
+          const tenantId = zapplyOrg.tenantId ?? null;
+          const tenantName = zapplyOrg.tenantName ?? "Unknown";
 
           const expiresAt = new Date(
             Date.now() + ((expires_in ?? 1800) - 60) * 1000,

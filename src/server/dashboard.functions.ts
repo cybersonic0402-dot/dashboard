@@ -296,13 +296,17 @@ export const getDashboardData = createServerFn({ method: "GET" }).middleware([re
   collectError("xero", xeroCache);
   collectError("picqer", picqerCache);
 
-  // Manual data (cash positions, inventory, settings) — surfaces on Balance Sheet & Forecast.
+  // Cash and inventory now come exclusively from real sources — Xero +
+  // banking platforms for cash, Picqer for inventory. The manual
+  // cash_positions / inventory_positions tables (and the /admin/manual-data
+  // page that fed them) were retired. Only app_settings remains here for
+  // user-editable configuration (min_cash_buffer_eur, market_costs).
   let manual: {
     cashPositions: any[];
     inventoryPositions: any[];
-    manualInventoryCount: number;
+    manualInventoryCount: 0;
     picqerInventoryCount: number;
-    inventorySource: "picqer" | "manual" | "mixed" | "none";
+    inventorySource: "picqer" | "none";
     settings: Record<string, any>;
   } = {
     cashPositions: [],
@@ -314,18 +318,11 @@ export const getDashboardData = createServerFn({ method: "GET" }).middleware([re
   };
   try {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const [c, i, s] = await Promise.all([
-      supabaseAdmin.from("cash_positions").select("*"),
-      supabaseAdmin.from("inventory_positions").select("*"),
-      supabaseAdmin.from("app_settings").select("*"),
-    ]);
+    const { data: settingsRows } = await supabaseAdmin.from("app_settings").select("*");
     const settingsMap: Record<string, any> = {};
-    for (const r of s.data ?? []) settingsMap[r.key] = r.value;
-    // Merge Picqer (live) inventory + manual entries. Key by (sku, location);
-    // manual entries override Picqer on conflict so the user can patch edge
-    // cases (damaged stock, off-warehouse positions) without losing the
-    // override on the next sync.
-    const manualRows: any[] = Array.isArray(i.data) ? i.data : [];
+    for (const r of settingsRows ?? []) settingsMap[r.key] = r.value;
+    // Inventory positions = whatever Picqer returns. Manual augmentation
+    // is no longer accepted, so no merge step.
     const picqerPayload = picqerCache?.payload as any;
     const picqerRows: any[] =
       picqerPayload &&
@@ -335,39 +332,16 @@ export const getDashboardData = createServerFn({ method: "GET" }).middleware([re
       Array.isArray(picqerPayload.rows)
         ? picqerPayload.rows
         : [];
-    const merged = new Map<string, any>();
-    for (const r of picqerRows) {
-      const sku = String(r.sku ?? "").trim();
-      const loc = String(r.location ?? "").trim();
-      if (!sku) continue;
-      merged.set(`${sku}::${loc}`, { ...r, source: r.source ?? "picqer" });
-    }
-    for (const r of manualRows) {
-      const sku = String(r.sku ?? "").trim();
-      const loc = String(r.location ?? "").trim();
-      if (!sku) continue;
-      merged.set(`${sku}::${loc}`, { ...r, source: "manual" });
-    }
-    const mergedRows = Array.from(merged.values()).sort((a, b) =>
+    const sortedRows = [...picqerRows].sort((a, b) =>
       String(a.sku).localeCompare(String(b.sku)) ||
       String(a.location ?? "").localeCompare(String(b.location ?? "")),
     );
-    const picqerCount = picqerRows.length;
-    const manualCount = manualRows.length;
-    const inventorySource: "picqer" | "manual" | "mixed" | "none" =
-      picqerCount > 0 && manualCount > 0
-        ? "mixed"
-        : picqerCount > 0
-          ? "picqer"
-          : manualCount > 0
-            ? "manual"
-            : "none";
     manual = {
-      cashPositions: c.data ?? [],
-      inventoryPositions: mergedRows,
-      manualInventoryCount: manualCount,
-      picqerInventoryCount: picqerCount,
-      inventorySource,
+      cashPositions: [],
+      inventoryPositions: sortedRows,
+      manualInventoryCount: 0,
+      picqerInventoryCount: picqerRows.length,
+      inventorySource: picqerRows.length > 0 ? "picqer" : "none",
       settings: settingsMap,
     };
   } catch (err: any) {

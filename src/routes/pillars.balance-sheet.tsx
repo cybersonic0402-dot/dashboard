@@ -78,6 +78,85 @@ function Row({
   );
 }
 
+// Row that renders a bank/platform balance plus a Jortt/Xero breakdown.
+// When both sources contributed we show:
+//   - a "Xero + Jortt" pill next to the name
+//   - a per-source line under the headline value
+//   - a native title tooltip with absolute amounts so the user can verify
+//     the books agree across systems
+// When only one source contributed we show that source as a single pill so
+// it's still obvious where the number came from.
+function BankRow({
+  row,
+  fmt,
+  subtitle,
+}: {
+  row: {
+    name: string;
+    balance: number;
+    currency: string;
+    sources: { xero: number | null; jortt: number | null };
+  };
+  fmt: (n: number | null | undefined, currency?: string) => string;
+  subtitle?: string;
+}) {
+  const { xero, jortt } = row.sources;
+  const hasXero = xero != null;
+  const hasJortt = jortt != null;
+  const bothSources = hasXero && hasJortt;
+  const sourceLabel = bothSources
+    ? "Xero + Jortt"
+    : hasXero
+      ? "Xero"
+      : hasJortt
+        ? "Jortt"
+        : null;
+  const titleParts: string[] = [];
+  if (hasXero) titleParts.push(`Xero: ${fmt(xero ?? 0, row.currency)}`);
+  if (hasJortt) titleParts.push(`Jortt: ${fmt(jortt ?? 0, row.currency)}`);
+  if (bothSources) titleParts.push(`Combined: ${fmt(row.balance, row.currency)}`);
+  const title = titleParts.join(" · ");
+  return (
+    <div
+      className="flex items-center justify-between border-t border-neutral-100 py-3 first:border-t-0 first:pt-0"
+      title={title || undefined}
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        <BankIcon name={row.name} />
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="text-[13px] font-medium text-neutral-900">{row.name}</div>
+            {sourceLabel && (
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+                  bothSources
+                    ? "bg-violet-100 text-violet-700"
+                    : hasXero
+                      ? "bg-sky-100 text-sky-700"
+                      : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                {sourceLabel}
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-neutral-400">{subtitle ?? row.name}</div>
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="text-[14px] font-semibold tabular-nums">{fmt(row.balance, row.currency)}</div>
+        {bothSources ? (
+          <div className="text-[10px] text-neutral-500 tabular-nums">
+            X {fmt(xero ?? 0, row.currency)} · J {fmt(jortt ?? 0, row.currency)}
+          </div>
+        ) : (
+          <div className="text-[10px] uppercase tracking-wider text-neutral-400">{row.currency}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BankIcon({ name }: { name: string }) {
   const n = name.toLowerCase();
   let bg = "bg-neutral-900 text-white";
@@ -202,35 +281,68 @@ function BalanceSheetPage() {
       year: "numeric",
     });
 
-    // ── Bank accounts (Xero) ──
+    // ── Bank accounts — MERGE Xero + Jortt ──
+    // The previous implementation deduped by name keeping ONLY the first
+    // source (Xero won, Jortt was silently dropped on overlap). That hid
+    // accounts the user had in Jortt entirely, and made it impossible to
+    // verify the books matched between systems. Now each unique name
+    // records contributions from both sources; the displayed `balance` is
+    // the sum, and the row keeps the per-source values so the UI can render
+    // a "Xero €X · Jortt €Y" breakdown on hover.
+    //
+    // Jortt's /v3/bank_accounts payload uses `current_balance.value`; Xero's
+    // is already normalized upstream to `balance`. Normalize here.
+    type BankSources = { xero: number | null; jortt: number | null };
     const xeroBanks: any[] = Array.isArray(xero?.bankAccounts) ? xero.bankAccounts : [];
     const jorttBanks: any[] = Array.isArray(jortt?.bankAccounts) ? jortt.bankAccounts : [];
-    const merged = new Map<string, { name: string; balance: number; currency: string }>();
-    for (const b of [...xeroBanks, ...jorttBanks]) {
+    const merged = new Map<
+      string,
+      { name: string; balance: number; currency: string; sources: BankSources }
+    >();
+    const addSource = (b: any, source: "xero" | "jortt") => {
       const name = String(b?.name ?? "").trim();
-      if (!name) continue;
+      if (!name) return;
       const k = name.toLowerCase();
-      if (!merged.has(k)) {
+      const rawBalance =
+        b?.balance ??
+        b?.current_balance?.value ??
+        b?.current_balance ??
+        b?.balance?.value ??
+        0;
+      const value = Number(rawBalance);
+      if (!Number.isFinite(value)) return;
+      const currency = String(b?.currency ?? "EUR");
+      const existing = merged.get(k);
+      if (!existing) {
         merged.set(k, {
           name,
-          balance: Number(b?.balance ?? 0),
-          currency: String(b?.currency ?? "EUR"),
+          balance: value,
+          currency,
+          sources: source === "xero" ? { xero: value, jortt: null } : { xero: null, jortt: value },
         });
+      } else {
+        existing.balance += value;
+        existing.sources[source] = (existing.sources[source] ?? 0) + value;
       }
-    }
+    };
+    for (const b of xeroBanks) addSource(b, "xero");
+    for (const b of jorttBanks) addSource(b, "jortt");
     const bankAccountsAll = Array.from(merged.values());
     const isPlatform = (n: string) =>
       /(mollie|shopify|paypal|stripe|adyen|klarna|amazon|revolut pay)/i.test(n);
     const bankAccountsBank = bankAccountsAll.filter((b) => !isPlatform(b.name));
     const platformPending = bankAccountsAll.filter((b) => isPlatform(b.name));
 
-    // Helper to ensure a platform row appears even with zero balance
+    // Helper to ensure a platform row appears even with zero balance.
+    // Platform rows don't have a Jortt/Xero split — they come from the
+    // platform API directly — so `sources` stays empty. The UI only shows
+    // the breakdown tooltip when at least one of xero/jortt is non-null.
     const seen = new Set(platformPending.map((p) => p.name.toLowerCase()));
     const pushPlatform = (row: { name: string; balance: number; currency: string }) => {
       const key = row.name.toLowerCase();
       if (seen.has(key)) return;
       seen.add(key);
-      platformPending.push(row);
+      platformPending.push({ ...row, sources: { xero: null, jortt: null } });
     };
 
     // Shopify Payments — one row per market (live or not)
@@ -278,21 +390,12 @@ function BalanceSheetPage() {
       }
     }
 
-    // Revolut Pay (merchant payouts) — manual until API is wired
+    // Revolut Pay (merchant payouts) — placeholder until API is wired
     pushPlatform({ name: "Revolut Pay", balance: 0, currency: "EUR" });
 
-    const manualCash: any[] = Array.isArray((data as any)?.manual?.cashPositions)
-      ? (data as any).manual.cashPositions
-      : [];
-    for (const m of manualCash) {
-      const acct = {
-        name: String(m.account_name ?? "Account"),
-        balance: Number(m.balance_eur ?? 0),
-        currency: String(m.currency ?? "EUR"),
-      };
-      if (m.account_type && m.account_type !== "bank") platformPending.push(acct);
-      else bankAccountsBank.push(acct);
-    }
+    // The manual cash_positions table was retired; cash now comes
+    // exclusively from Xero bankAccounts + Shopify/PayPal/Mollie payouts
+    // pulled in above.
 
     const cashBank = bankAccountsBank.length
       ? bankAccountsBank.reduce((s, b) => s + (b.balance ?? 0), 0)
@@ -329,11 +432,14 @@ function BalanceSheetPage() {
       })
       .sort((a, b) => b.value - a.value);
 
-    // Augment with manually-entered inventory positions
-    const manualInv: any[] = Array.isArray((data as any)?.manual?.inventoryPositions)
+    // Augment with Picqer-sourced inventory. The dashboard loader publishes
+    // these under `manual.inventoryPositions` for historical reasons — the
+    // manual inventory table that used to also feed this array was retired,
+    // so this is now Picqer rows only.
+    const picqerInv: any[] = Array.isArray((data as any)?.manual?.inventoryPositions)
       ? (data as any).manual.inventoryPositions
       : [];
-    for (const m of manualInv) {
+    for (const m of picqerInv) {
       const qty = Number(m.pieces ?? 0);
       const cost = Number(m.unit_cost_eur ?? 0);
       inventoryItems.push({
@@ -833,22 +939,7 @@ function BalanceSheetPage() {
                 )
               ) : (
                 bankAccountsBank.map((b, i) => (
-                  <div
-                    key={`${b.name}-${i}`}
-                    className="flex items-center justify-between border-t border-neutral-100 py-3 first:border-t-0 first:pt-0"
-                  >
-                    <div className="flex items-center gap-3">
-                      <BankIcon name={b.name} />
-                      <div>
-                        <div className="text-[13px] font-medium text-neutral-900">{b.name}</div>
-                        <div className="text-[11px] text-neutral-400">{b.name}</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-[14px] font-semibold tabular-nums">{fmt(b.balance, b.currency)}</div>
-                      <div className="text-[10px] uppercase tracking-wider text-neutral-400">{b.currency}</div>
-                    </div>
-                  </div>
+                  <BankRow key={`${b.name}-${i}`} row={b} fmt={fmt} />
                 ))
               )}
             </div>
@@ -861,22 +952,7 @@ function BalanceSheetPage() {
                 <div className="text-[13px] text-neutral-400">{DASH}</div>
               ) : (
                 platformPending.map((b, i) => (
-                  <div
-                    key={`${b.name}-${i}`}
-                    className="flex items-center justify-between border-t border-neutral-100 py-3 first:border-t-0 first:pt-0"
-                  >
-                    <div className="flex items-center gap-3">
-                      <BankIcon name={b.name} />
-                      <div>
-                        <div className="text-[13px] font-medium text-neutral-900">{b.name}</div>
-                        <div className="text-[11px] text-neutral-400">Pending payouts</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-[14px] font-semibold tabular-nums">{fmt(b.balance, b.currency)}</div>
-                      <div className="text-[10px] uppercase tracking-wider text-neutral-400">{b.currency}</div>
-                    </div>
-                  </div>
+                  <BankRow key={`${b.name}-${i}`} row={b} fmt={fmt} subtitle="Pending payouts" />
                 ))
               )}
             </div>

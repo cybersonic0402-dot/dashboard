@@ -542,17 +542,24 @@ function DailyPnlPage() {
                 <ChartSkeleton />
               ) : revenueSeries.hasAny ? (
                 <ResponsiveContainer width="100%" height="100%">
+                  {/* Recharts writes `stroke`/`fill` as raw SVG attributes,
+                      where CSS variables (`hsl(var(--foreground))`) do not
+                      reliably resolve across browsers — the line was being
+                      rendered but with an empty stroke, which is why hover
+                      dots were visible but the path itself was invisible.
+                      Using explicit hex colors fixes it; the active-dot is
+                      kept small enough that 90+ day ranges still read. */}
                   <LineChart data={revenueSeries.points} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
+                    <CartesianGrid stroke="#e5e5e5" strokeDasharray="3 3" vertical={false} />
                     <XAxis
                       dataKey="label"
-                      tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                      tick={{ fontSize: 11, fill: "#737373" }}
                       tickLine={false}
                       axisLine={false}
                       minTickGap={16}
                     />
                     <YAxis
-                      tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                      tick={{ fontSize: 11, fill: "#737373" }}
                       tickLine={false}
                       axisLine={false}
                       width={56}
@@ -567,8 +574,8 @@ function DailyPnlPage() {
                         fontSize: 11,
                         padding: "6px 10px",
                         borderRadius: 6,
-                        border: "1px solid hsl(var(--border))",
-                        background: "hsl(var(--card))",
+                        border: "1px solid #e5e5e5",
+                        background: "#ffffff",
                       }}
                       formatter={(v: any, name: any) => [fmtMoney(Number(v), "EUR"), name]}
                     />
@@ -576,19 +583,24 @@ function DailyPnlPage() {
                       type="monotone"
                       dataKey="selected"
                       name="Selected"
-                      stroke="hsl(var(--foreground))"
-                      strokeWidth={2}
-                      dot={revenueSeries.len <= 14 ? { r: 2.5 } : false}
-                      activeDot={{ r: 4 }}
+                      stroke="#171717"
+                      strokeWidth={2.5}
+                      dot={revenueSeries.len <= 31 ? { r: 2.5, fill: "#171717", stroke: "#171717" } : false}
+                      activeDot={{ r: 4, fill: "#171717", stroke: "#ffffff", strokeWidth: 2 }}
+                      isAnimationActive={false}
+                      connectNulls
                     />
                     <Line
                       type="monotone"
                       dataKey="previous"
                       name="Previous period"
-                      stroke="hsl(var(--muted-foreground))"
+                      stroke="#a3a3a3"
                       strokeWidth={1.5}
                       strokeDasharray="4 4"
                       dot={false}
+                      activeDot={{ r: 3, fill: "#a3a3a3", stroke: "#ffffff", strokeWidth: 1.5 }}
+                      isAnimationActive={false}
+                      connectNulls
                     />
                   </LineChart>
                 </ResponsiveContainer>

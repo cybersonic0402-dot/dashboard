@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
 import { getDashboardData } from "@/server/dashboard.functions";
-import { getManualDataSnapshot } from "@/server/manual-data.functions";
 import { OverviewView } from "@/components/FinanceDashboard.tsx";
 
 export const Route = createFileRoute("/overview-dashboard")({
@@ -58,16 +57,12 @@ function OverviewPage() {
   const [dateRange, setDateRange] = useState({ from: daysAgoStr(7), to: todayStr() });
   const [rangeData, setRangeData] = useState<any>(null);
   const [rangeSyncing, setRangeSyncing] = useState(false);
-  const [manualData, setManualData] = useState<any>(null);
 
   useEffect(() => {
     let alive = true;
     getDashboardData()
       .then((d) => alive && setData(d))
       .finally(() => alive && setLoading(false));
-    getManualDataSnapshot()
-      .then((m) => alive && setManualData(m))
-      .catch(() => { if (alive) setManualData(null); });
     return () => { alive = false; };
   }, []);
 
@@ -173,7 +168,6 @@ function OverviewPage() {
               return data?.shopifyRepeatFunnel?.calcVersion >= 6 ? data.shopifyRepeatFunnel : null;
             })()}
             sourceStatus={data?.sourceStatus ?? null}
-            manualData={manualData}
           />
           <div className="mt-10 text-center text-[11px] text-neutral-400">
             {data?.syncedAt ? `Synced · ${new Date(data.syncedAt).toLocaleString()}` : "No live sources connected"}

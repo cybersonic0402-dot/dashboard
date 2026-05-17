@@ -1354,161 +1354,10 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
       );
     })()}
 
-    {/* Cash & Inventory positions — manual data */}
-    {(() => {
-      const cash = Array.isArray(manualData?.cashPositions) ? manualData.cashPositions : [];
-      const inv = Array.isArray(manualData?.inventoryPositions) ? manualData.inventoryPositions : [];
-
-      const isReceivable = (t: string) => /receivable/i.test(t);
-      const isPayable = (t: string) => /payable/i.test(t);
-      const cashAccounts = cash.filter((c: any) => !isReceivable(c.account_type) && !isPayable(c.account_type));
-      const receivables = cash.filter((c: any) => isReceivable(c.account_type));
-      const payables = cash.filter((c: any) => isPayable(c.account_type));
-
-      const sumEur = (rows: any[]) => rows.reduce((s, r) => s + Number(r.balance_eur ?? 0), 0);
-      const totalCash = sumEur(cashAccounts);
-      const totalReceivables = sumEur(receivables);
-      const totalPayables = Math.abs(sumEur(payables));
-      const netLiquidity = totalCash + totalReceivables - totalPayables;
-
-      // Inventory grouped by FFC location
-      const invByLocation: Record<string, { pieces: number; valueEur: number }> = {};
-      let invPieces = 0, invValue = 0;
-      for (const r of inv) {
-        const loc = (r.location || "Unassigned").toString();
-        const pieces = Number(r.pieces ?? 0);
-        const value = pieces * Number(r.unit_cost_eur ?? 0);
-        invPieces += pieces;
-        invValue += value;
-        if (!invByLocation[loc]) invByLocation[loc] = { pieces: 0, valueEur: 0 };
-        invByLocation[loc].pieces += pieces;
-        invByLocation[loc].valueEur += value;
-      }
-      const invLocationRows = Object.entries(invByLocation).sort((a, b) => b[1].valueEur - a[1].valueEur);
-
-      return (
-        <section className="mt-3 grid gap-3 lg:grid-cols-2">
-          {/* Cash positions */}
-          {cash.length > 0 ? (
-            <Card className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <div className="text-[13px] font-semibold">Cash positions</div>
-                  <div className="mt-0.5 text-[11px] text-neutral-400">All accounts · receivables &amp; payables · EUR</div>
-                </div>
-                <span className="inline-flex items-center gap-1 rounded-md bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500">Manual</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-neutral-400">Cash</div>
-                  <div className="mt-0.5 text-[16px] font-semibold tabular-nums">€{Math.round(totalCash).toLocaleString()}</div>
-                </div>
-                <div className="rounded-md border border-emerald-100 bg-emerald-50/40 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-emerald-600">Receivable</div>
-                  <div className="mt-0.5 text-[16px] font-semibold tabular-nums text-emerald-700">€{Math.round(totalReceivables).toLocaleString()}</div>
-                </div>
-                <div className="rounded-md border border-rose-100 bg-rose-50/40 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-rose-600">Payable</div>
-                  <div className="mt-0.5 text-[16px] font-semibold tabular-nums text-rose-700">€{Math.round(totalPayables).toLocaleString()}</div>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-[12px]">
-                  <thead>
-                    <tr className="border-b border-neutral-100 text-left text-[10px] font-medium uppercase tracking-wider text-neutral-400">
-                      <th className="pb-2 pr-2">Account</th>
-                      <th className="pb-2 pr-2">Type</th>
-                      <th className="pb-2 pr-2">Cur.</th>
-                      <th className="pb-2 text-right">Balance (EUR)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...cashAccounts, ...receivables, ...payables].map((c: any) => {
-                      const recv = isReceivable(c.account_type);
-                      const pay = isPayable(c.account_type);
-                      return (
-                        <tr key={c.id} className="border-b border-neutral-50 last:border-0">
-                          <td className="py-1.5 pr-2 font-medium">{c.account_name}</td>
-                          <td className="py-1.5 pr-2 text-neutral-500">{c.account_type}</td>
-                          <td className="py-1.5 pr-2 text-neutral-500">{c.currency}</td>
-                          <td className={`py-1.5 text-right tabular-nums ${pay ? "text-rose-600" : recv ? "text-emerald-600" : ""}`}>
-                            {pay ? "−" : ""}€{Math.round(Math.abs(Number(c.balance_eur ?? 0))).toLocaleString()}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    <tr className="font-semibold">
-                      <td className="pt-3 pr-2" colSpan={3}>Net liquidity</td>
-                      <td className={`pt-3 text-right tabular-nums ${netLiquidity < 0 ? "text-rose-600" : ""}`}>€{Math.round(netLiquidity).toLocaleString()}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ) : (
-            <Card className="p-5 border-dashed">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[13px] font-semibold">Cash positions</div>
-                <span className="inline-flex items-center gap-1 rounded-md bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500">Manual</span>
-              </div>
-              <div className="text-[12px] text-neutral-500">No cash, receivables or payables added yet.</div>
-              <a href="/admin/manual-data" className="mt-2 inline-block text-[12px] font-medium text-blue-600 hover:underline">Add accounts →</a>
-            </Card>
-          )}
-
-          {/* Inventory positions */}
-          {inv.length > 0 ? (
-            <Card className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <div className="text-[13px] font-semibold">Inventory positions</div>
-                  <div className="mt-0.5 text-[11px] text-neutral-400">By FFC location · {invPieces.toLocaleString()} pcs</div>
-                </div>
-                <span className="inline-flex items-center gap-1 rounded-md bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500">Manual</span>
-              </div>
-              <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2 mb-3">
-                <div className="text-[10px] uppercase tracking-wider text-neutral-400">Total inventory value</div>
-                <div className="mt-0.5 text-[20px] font-semibold tabular-nums">€{Math.round(invValue).toLocaleString()}</div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-[12px]">
-                  <thead>
-                    <tr className="border-b border-neutral-100 text-left text-[10px] font-medium uppercase tracking-wider text-neutral-400">
-                      <th className="pb-2 pr-2">FFC / Location</th>
-                      <th className="pb-2 pr-2 text-right">Pieces</th>
-                      <th className="pb-2 text-right">Value (EUR)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invLocationRows.map(([loc, v]) => (
-                      <tr key={loc} className="border-b border-neutral-50 last:border-0">
-                        <td className="py-1.5 pr-2 font-medium">{loc}</td>
-                        <td className="py-1.5 pr-2 text-right tabular-nums">{v.pieces.toLocaleString()}</td>
-                        <td className="py-1.5 text-right tabular-nums">€{Math.round(v.valueEur).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                    <tr className="font-semibold">
-                      <td className="pt-3 pr-2">Total</td>
-                      <td className="pt-3 pr-2 text-right tabular-nums">{invPieces.toLocaleString()}</td>
-                      <td className="pt-3 text-right tabular-nums">€{Math.round(invValue).toLocaleString()}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ) : (
-            <Card className="p-5 border-dashed">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[13px] font-semibold">Inventory positions</div>
-                <span className="inline-flex items-center gap-1 rounded-md bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500">Manual</span>
-              </div>
-              <div className="text-[12px] text-neutral-500">No inventory positions added yet.</div>
-              <a href="/admin/manual-data" className="mt-2 inline-block text-[12px] font-medium text-blue-600 hover:underline">Add inventory →</a>
-            </Card>
-          )}
-        </section>
-      );
-    })()}
+    {/* Cash & Inventory positions are now sourced from Xero + banking
+        platforms + Picqer respectively (see the Balance Sheet pillar). The
+        previous "manual data" section that backed them was removed when
+        /admin/manual-data was retired. */}
 
     {/* Syncing overlay */}
     {rangeSyncing && (
@@ -2656,7 +2505,7 @@ export const MarketsView = ({ liveMarkets = null, twData = [], dateRange = null,
 
   // Real PSP fees for that month: Shopify Payments is per-market, PayPal +
   // Mollie are tenant-level so we allocate by revenue share. Falls back to
-  // the manual per-market % rate from /admin/manual-data when real data
+  // the manual per-market % rate from app_settings.market_costs when real data
   // hasn't arrived (no PSP integration, or month not yet aggregated).
   const feesEntryThisMonth: any =
     latestMonthKey && paymentFeesByMonth ? paymentFeesByMonth[latestMonthKey] : null;
@@ -2681,7 +2530,7 @@ export const MarketsView = ({ liveMarkets = null, twData = [], dateRange = null,
       //      cache populated by fetchTripleWhaleShippingMonthly. Often the
       //      survivor when (1) failed in the inline TW call but the standalone
       //      shipping sync succeeded.
-      //   3. orders × manual.shippingPerOrder from /admin/manual-data.
+      //   3. orders × manual.shippingPerOrder from app_settings.market_costs.
       //   4. "—" in the UI (shippingCost === 0).
       // Previously only paths (1) and (3) were wired, so when TW Orcabase
       // failed on the current range AND manual costs weren't configured the
@@ -2933,7 +2782,10 @@ export const MarketsView = ({ liveMarkets = null, twData = [], dateRange = null,
           </table>
         </div>
         <div className="border-t border-neutral-100 px-5 py-3 text-[11px] text-neutral-400">
-          Shipping (€/order) and payment-fee % per market are configured in <a href="/admin/manual-data" className="underline hover:text-neutral-700">Manual data</a>. Refund rate uses Shopify gross-vs-net revenue.
+          Shipping (€/order) and payment-fee % per market are read from the
+          <code className="mx-1">market_costs</code> entry in
+          <code className="ml-1">app_settings</code>. Refund rate uses Shopify
+          gross-vs-net revenue.
         </div>
       </Card>
 

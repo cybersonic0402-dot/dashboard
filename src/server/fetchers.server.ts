@@ -3764,8 +3764,25 @@ function monthIsoKey(dateStr: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-// Get an access_token for ONE scope (Jortt requires one scope per token).
+// Get an access_token for ONE scope. Two auth strategies:
+//
+//   1. JORTT_API_TOKEN (preferred) — a personal API token / bearer string
+//      from the Jortt UI. It carries the full account's permissions and works
+//      against the user's real books. We reuse the same token for every
+//      scope, which collapses 8 token-endpoint round trips into zero.
+//
+//   2. JORTT_CLIENT_ID + JORTT_CLIENT_SECRET (legacy) — OAuth
+//      client_credentials, one token per scope. The grant returns a token
+//      bound to whichever organization the OAuth client was created in,
+//      which is often an empty sandbox tenant separate from the user's real
+//      books — symptoms include "all scopes granted but list endpoints
+//      empty / organization null / bank_accounts: []".
 async function getJorttTokenForScope(scope: string): Promise<string | null> {
+  const personalToken = process.env.JORTT_API_TOKEN;
+  if (personalToken && personalToken.trim().length > 0) {
+    return personalToken.trim();
+  }
+
   const clientId = process.env.JORTT_CLIENT_ID;
   const clientSecret = process.env.JORTT_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
@@ -4160,21 +4177,61 @@ export async function fetchJortt() {
     return sum + (Number.isFinite(v) ? v : 0);
   }, 0);
 
+  // Jortt wraps every report response under `data`, then exposes the actual
+  // metrics either as `{value, currency}` objects or as plain strings. The
+  // previous parser only looked at the top level (`cashRes.total_balance`)
+  // and at three field names — so even when the API returned a valid cash
+  // report, we silently extracted `null`. Walk `data` first, then try every
+  // common cash-and-bank field name Jortt has shipped across API versions.
   const cashBalance: number | null = (() => {
+    const pickNumber = (raw: any): number | null => {
+      if (raw == null) return null;
+      const v = typeof raw === "object" ? (raw.value ?? raw.amount ?? null) : raw;
+      if (v == null) return null;
+      const n = parseFloat(String(v));
+      return Number.isFinite(n) ? n : null;
+    };
     if (cashRes) {
-      const v = cashRes?.total_balance?.value ?? cashRes?.balance?.value ?? cashRes?.cash ?? null;
-      if (v != null) {
-        const n = parseFloat(String(v));
-        if (Number.isFinite(n)) return n;
+      const root = cashRes?.data && typeof cashRes.data === "object" ? cashRes.data : cashRes;
+      const candidates = [
+        root?.total_balance,
+        root?.balance,
+        root?.cash_and_bank,
+        root?.cash,
+        root?.bank,
+        root?.totaal_liquide_middelen,
+        root?.liquide_middelen,
+      ];
+      for (const c of candidates) {
+        const n = pickNumber(c);
+        if (n !== null) return n;
+      }
+      // Some Jortt tenants return per-account rows under `accounts` /
+      // `bank_accounts` directly in the cash_and_bank report. Sum them.
+      const accountRows = Array.isArray(root?.accounts)
+        ? root.accounts
+        : Array.isArray(root?.bank_accounts)
+          ? root.bank_accounts
+          : null;
+      if (accountRows) {
+        const sum = accountRows.reduce(
+          (s: number, a: any) =>
+            s + (pickNumber(a?.balance ?? a?.current_balance ?? a?.amount) ?? 0),
+          0,
+        );
+        if (sum > 0) return sum;
       }
     }
     // Fall back to summing live bank account balances
     if (bankAccounts.length > 0) {
       const sum = bankAccounts.reduce((s: number, a: any) => {
-        const v = parseFloat(
-          String(a?.current_balance?.value ?? a?.balance?.value ?? a?.balance ?? "0"),
-        );
-        return s + (Number.isFinite(v) ? v : 0);
+        const n =
+          pickNumber(a?.current_balance) ??
+          pickNumber(a?.balance) ??
+          pickNumber(a?.attributes?.current_balance) ??
+          pickNumber(a?.attributes?.balance) ??
+          0;
+        return s + n;
       }, 0);
       return sum > 0 ? sum : null;
     }
