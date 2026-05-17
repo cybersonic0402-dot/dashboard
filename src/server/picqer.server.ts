@@ -98,6 +98,15 @@ type PicqerStock = {
   freestock?: number;
 };
 
+type PicqerImage = {
+  // Picqer's field names vary across API versions; accept all.
+  thumbnail_url?: string | null;
+  small_url?: string | null;
+  large_url?: string | null;
+  image_url?: string | null;
+  url?: string | null;
+};
+
 type PicqerProduct = {
   idproduct: number;
   productcode: string;
@@ -105,7 +114,32 @@ type PicqerProduct = {
   price?: number | null;
   fixedstockprice?: number | null;
   stock?: PicqerStock[];
+  // Image fields — sometimes inline on the product, sometimes need a follow-up
+  // call to /products/<id>/images. We try inline first to keep syncs fast.
+  image_url?: string | null;
+  thumbnail_url?: string | null;
+  images?: PicqerImage[] | null;
 };
+
+// Prefer the smallest variant — the inventory table renders 40×40 thumbnails,
+// so a 200px CDN crop is plenty and cuts payload weight by ~10× vs full-size.
+function pickImageUrl(p: PicqerProduct | PicqerImage | null | undefined): string | null {
+  if (!p) return null;
+  const candidates: Array<string | null | undefined> = [
+    (p as any).thumbnail_url,
+    (p as any).small_url,
+    (p as any).image_url,
+    (p as any).url,
+    (p as any).large_url,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.startsWith("http")) return c;
+  }
+  if (Array.isArray((p as any).images) && (p as any).images.length > 0) {
+    return pickImageUrl((p as any).images[0]);
+  }
+  return null;
+}
 
 type PicqerWarehouse = {
   idwarehouse: number;
@@ -123,6 +157,7 @@ export type PicqerInventoryRow = {
   pieces_total: number; // on-hand stock (incl. reservations) for reconciliation
   unit_cost_eur: number;
   source: "picqer";
+  imageUrl?: string | null;
 };
 
 async function picqerGet<T>(
@@ -218,6 +253,54 @@ async function fetchAllProducts(
   return all;
 }
 
+/**
+ * Resolve an image URL for each product. Tries the inline field first
+ * (instant — already in the products payload). For products without an
+ * inline image, falls back to /api/v1/products/<id>/images. Concurrency is
+ * capped so we don't burn Picqer's 500-req/min budget on a single sync.
+ */
+async function resolveProductImages(
+  baseUrl: string,
+  headers: Record<string, string>,
+  products: PicqerProduct[],
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const needsFetch: PicqerProduct[] = [];
+  for (const p of products) {
+    const inline = pickImageUrl(p);
+    if (inline) out.set(p.idproduct, inline);
+    else needsFetch.push(p);
+  }
+
+  // Cap the fallback fetch at 120 products and a small concurrency window so
+  // an inventory sync stays well under a few seconds even when every product
+  // needs its own /images call. SKUs beyond the cap render with a placeholder.
+  const MAX_LOOKUPS = 120;
+  const CONCURRENCY = 8;
+  const queue = needsFetch.slice(0, MAX_LOOKUPS);
+
+  async function worker() {
+    while (queue.length > 0) {
+      const p = queue.shift();
+      if (!p) return;
+      try {
+        const imgs = await picqerGet<PicqerImage[]>(
+          baseUrl,
+          `/api/v1/products/${p.idproduct}/images`,
+          headers,
+        );
+        const url = pickImageUrl({ images: imgs ?? [] } as any);
+        if (url) out.set(p.idproduct, url);
+      } catch (err: any) {
+        // Non-fatal — missing image just renders a placeholder in the UI.
+        console.warn(`[picqer] image lookup for ${p.idproduct} failed: ${err?.message ?? err}`);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+  return out;
+}
+
 async function fetchWarehouses(
   baseUrl: string,
   headers: Record<string, string>,
@@ -245,7 +328,7 @@ async function fetchWarehouses(
 export async function fetchPicqerInventory(): Promise<{
   live: true;
   fetchedAt: string;
-  calcVersion: 1;
+  calcVersion: 2;
   totalProducts: number;
   totalRows: number;
   rows: PicqerInventoryRow[];
@@ -270,6 +353,13 @@ export async function fetchPicqerInventory(): Promise<{
     fetchWarehouses(baseUrl, headers),
   ]);
 
+  // Only resolve images for products that actually have stock — there's no
+  // point spending API calls on SKUs the table will never show.
+  const productsWithStock = products.filter(
+    (p) => Array.isArray(p.stock) && p.stock.some((s) => Number(s?.stock ?? 0) > 0),
+  );
+  const productImages = await resolveProductImages(baseUrl, headers, productsWithStock);
+
   const rows: PicqerInventoryRow[] = [];
   for (const p of products) {
     const sku = String(p.productcode ?? "").trim();
@@ -277,6 +367,7 @@ export async function fetchPicqerInventory(): Promise<{
     const unitCost = Number(p.fixedstockprice ?? p.price ?? 0);
     const stockArr = Array.isArray(p.stock) ? p.stock : [];
     if (stockArr.length === 0) continue;
+    const imageUrl = productImages.get(p.idproduct) ?? null;
     for (const s of stockArr) {
       const id = Number(s?.idwarehouse);
       if (!Number.isFinite(id)) continue;
@@ -293,6 +384,7 @@ export async function fetchPicqerInventory(): Promise<{
         pieces_total: total,
         unit_cost_eur: Number.isFinite(unitCost) ? unitCost : 0,
         source: "picqer",
+        imageUrl,
       });
     }
   }
@@ -304,7 +396,7 @@ export async function fetchPicqerInventory(): Promise<{
   return {
     live: true,
     fetchedAt: new Date().toISOString(),
-    calcVersion: 1,
+    calcVersion: 2,
     totalProducts: products.length,
     totalRows: rows.length,
     rows,

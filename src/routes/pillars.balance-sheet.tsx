@@ -340,6 +340,7 @@ function BalanceSheetPage() {
         unitCost: cost,
         pieces: qty,
         value: qty * cost,
+        imageUrl: typeof m.imageUrl === "string" ? m.imageUrl : null,
       });
     }
     inventoryItems.sort((a, b) => b.value - a.value);
@@ -1085,7 +1086,8 @@ function BalanceSheetPage() {
           </div>
 
           <div className="mt-4 overflow-hidden rounded-lg">
-            <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1.2fr] border-b border-neutral-100 px-2 py-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+            <div className="grid grid-cols-[44px_2fr_1fr_1fr_1fr_1fr_1.2fr] border-b border-neutral-100 px-2 py-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+              <div></div>
               <div>SKU</div>
               <div>Location</div>
               <div className="text-right">Unit Cost</div>
@@ -1101,8 +1103,9 @@ function BalanceSheetPage() {
                 return (
                   <div
                     key={`${it.name}-${i}`}
-                    className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1.2fr] items-center border-b border-neutral-50 px-2 py-2.5 text-[12px]"
+                    className="grid grid-cols-[44px_2fr_1fr_1fr_1fr_1fr_1.2fr] items-center gap-x-2 border-b border-neutral-50 px-2 py-2.5 text-[12px]"
                   >
+                    <InventoryThumb src={it.imageUrl} alt={it.name} />
                     <div className="text-neutral-800">{it.name}</div>
                     <div>
                       <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">
@@ -1191,5 +1194,39 @@ function BalanceSheetPage() {
         </div>
       </div>
     </DashboardShell>
+  );
+}
+
+// Inventory thumbnail. Optimized for fast first paint:
+//   - Fixed 36×36 footprint avoids layout shift while the image streams in.
+//   - loading="lazy" lets the browser skip off-screen rows entirely.
+//   - decoding="async" keeps decoding off the main render thread.
+//   - referrerPolicy="no-referrer" so Picqer CDN can serve cross-origin
+//     without leaking the dashboard URL.
+//   - onError swap to placeholder so a dead image URL doesn't render broken.
+function InventoryThumb({ src, alt }: { src?: string | null; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <div
+        className="flex h-9 w-9 items-center justify-center rounded border border-neutral-200 bg-neutral-50 text-[9px] font-medium text-neutral-400"
+        aria-hidden
+      >
+        IMG
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={36}
+      height={36}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      className="h-9 w-9 rounded border border-neutral-200 bg-neutral-50 object-cover"
+    />
   );
 }
