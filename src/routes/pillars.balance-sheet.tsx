@@ -191,6 +191,8 @@ function BalanceSheetPage() {
     outstandingBreakdown,
     currentRatio,
     quickRatio,
+    inventoryDays,
+    inventoryDaysSource,
     suppliersInvoices,
   } = useMemo(() => {
     const asOf = syncedAt ? new Date(syncedAt) : new Date();
@@ -446,6 +448,40 @@ function BalanceSheetPage() {
     const quickRatio =
       ca != null && cl && cl !== 0 ? (ca - (inventoryTotal ?? 0)) / cl : null;
 
+    // ── Inventory days = Inventory ÷ (Annual COGS / 365) ──
+    // Prefer the real number when Xero reports both revenue and gross profit:
+    // COGS = Revenue − Gross Profit, summed over the last 12 months. When
+    // grossProfitByMonth is empty (Demo orgs / unconfigured charts of accounts
+    // / new tenants) we extrapolate annual COGS from YTD revenue × the
+    // industry-standard 45% COGS heuristic used elsewhere in the dashboard
+    // (see daily-pnl pillar) so the tile still renders a useful estimate.
+    const sumValues = (obj: any): number => {
+      if (!obj || typeof obj !== "object") return 0;
+      return Object.values(obj).reduce<number>(
+        (s, v) => s + (typeof v === "number" && Number.isFinite(v) ? v : 0),
+        0,
+      );
+    };
+    const revTtm = sumValues((xero as any)?.revenueByMonth);
+    const gpTtm = sumValues((xero as any)?.grossProfitByMonth);
+    const monthsWithGp = Object.values((xero as any)?.grossProfitByMonth ?? {}).filter(
+      (v) => typeof v === "number" && v !== 0,
+    ).length;
+    let cogsAnnual: number | null = null;
+    if (monthsWithGp > 0 && revTtm > 0) {
+      cogsAnnual = Math.max(0, revTtm - gpTtm);
+    } else {
+      const ytdRev = Number((xero as any)?.ytdRevenue ?? 0);
+      const monthsElapsed = Math.max(1, new Date().getUTCMonth() + 1);
+      if (ytdRev > 0) cogsAnnual = (ytdRev * 12) / monthsElapsed * 0.45;
+    }
+    const inventoryDays =
+      cogsAnnual && cogsAnnual > 0 && inventoryTotal && inventoryTotal > 0
+        ? inventoryTotal / (cogsAnnual / 365)
+        : null;
+    const inventoryDaysSource: "actual" | "estimated" | null =
+      inventoryDays == null ? null : monthsWithGp > 0 ? "actual" : "estimated";
+
     // ── Supplier invoice line items (use Xero bills if exposed, else show top suppliers) ──
     const suppliersInvoices = apSupplierList
       .slice(0, 12)
@@ -488,6 +524,8 @@ function BalanceSheetPage() {
       outstandingBreakdown,
       currentRatio,
       quickRatio,
+      inventoryDays,
+      inventoryDaysSource,
       suppliersInvoices,
     };
   }, [xero, jortt, shopifyPayouts, paypalBalances, mollieBalances, syncedAt, data]);
@@ -740,8 +778,15 @@ function BalanceSheetPage() {
           </Card>
           <Card className="p-5">
             <div className="text-[12px] text-neutral-500">Inventory days</div>
-            <div className="mt-2 text-[28px] font-semibold tabular-nums leading-none">{DASH}</div>
-            <div className="mt-3 text-[11px] text-amber-600">Target: 30–45</div>
+            <div className="mt-2 text-[28px] font-semibold tabular-nums leading-none">
+              {inventoryDays != null ? Math.round(inventoryDays).toLocaleString() : DASH}
+            </div>
+            <div className="mt-3 text-[11px] text-amber-600">
+              Target: 30–45
+              {inventoryDaysSource === "estimated" && (
+                <span className="ml-1 text-neutral-400">· est. (Xero gross profit not set)</span>
+              )}
+            </div>
           </Card>
         </section>
 
