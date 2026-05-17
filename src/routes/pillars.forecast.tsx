@@ -90,7 +90,19 @@ function ForecastPage() {
     };
   }, []);
 
-  const { weeks, totals, startCash, monthlyAvgRev, momTrend, minBuffer, perMarketForecast, forecastVsActuals } = useMemo(() => {
+  const {
+    weeks,
+    totals,
+    startCash,
+    monthlyAvgRev,
+    momTrend,
+    minBuffer,
+    perMarketForecast,
+    forecastVsActuals,
+    monthlyOpex,
+    outflowMonthLabel,
+    outflowSource,
+  } = useMemo(() => {
     const shopifyMonthly: any[] = Array.isArray(data?.shopifyMonthly) ? data.shopifyMonthly : [];
     const shopifyMarkets: any[] = Array.isArray(data?.shopifyMarkets?.markets)
       ? data.shopifyMarkets.markets
@@ -114,8 +126,34 @@ function ForecastPage() {
     const mom = prevAvg > 0 ? (avgRev - prevAvg) / prevAvg : 0.04;
 
     const cash0 = xero?.cashBalance ?? 0;
+    // Weekly INFLOW model:
+    //   baseInflow = trailing-3-month avg revenue / 4.33 weeks per month.
+    //   Compounded each week by mom/4.33 so a +12% MoM trend becomes the
+    //   right weekly drift. This is still a smoothing of bookings (not cash
+    //   actually hitting accounts), but it ties to Shopify revenue rather
+    //   than an unrelated heuristic.
     const baseInflow = avgRev > 0 ? avgRev / 4.33 : 0;
-    const baseOutflow = baseInflow * 0.39;
+
+    // Weekly OUTFLOW model:
+    //   Sum the operating-expense categories Xero booked in the most recent
+    //   non-empty month (team + agencies + content + software + rent +
+    //   other) and convert to a weekly run-rate. Falls back to null when no
+    //   Xero opex data is present so the row shows "—" instead of a
+    //   fabricated 39%-of-inflow number. This is the single largest fix in
+    //   the 13-week cashflow — the prior `baseOutflow = baseInflow * 0.39`
+    //   bore no relation to actual spending and made the "Net change" tile
+    //   read as a confident projection.
+    const opexRows: any[] = Array.isArray(xero?.opexByMonth) ? xero.opexByMonth : [];
+    const opexCategories = ["team", "agencies", "content", "software", "rent", "other"];
+    const lastOpexMonth =
+      [...opexRows].reverse().find((m) =>
+        opexCategories.some((k) => Number(m?.[k] ?? 0) > 0),
+      ) ?? null;
+    const monthlyOpex = lastOpexMonth
+      ? opexCategories.reduce((s, k) => s + Number(lastOpexMonth[k] ?? 0), 0)
+      : 0;
+    const baseOutflow = monthlyOpex > 0 ? monthlyOpex / 4.33 : 0;
+    const outflowSource: "xero" | "none" = monthlyOpex > 0 ? "xero" : "none";
 
     const startDate = new Date();
     startDate.setHours(0, 0, 0, 0);
@@ -130,7 +168,10 @@ function ForecastPage() {
       wd.setDate(monday.getDate() + i * 7);
       const growth = Math.pow(1 + mom / 4.33, i);
       const inflow = Math.round(baseInflow * growth);
-      const outflow = Math.round(baseOutflow * (1 + i * 0.005));
+      // Hold outflow flat at last-month's run-rate. Compounding outflow at
+      // an arbitrary rate (the old `1 + i * 0.005`) made the "ending cash"
+      // tile drift in a way no underlying cost commitment justified.
+      const outflow = Math.round(baseOutflow);
       const net = inflow - outflow;
       cumulative += net;
       const band = Math.round(Math.abs(net) * 0.18 + i * 400);
@@ -171,10 +212,14 @@ function ForecastPage() {
       })
       .sort((a: any, b: any) => b.projectedRevenue - a.projectedRevenue);
 
-    // Forecast vs actuals — last 3 months
+    // Forecast vs actuals — last 3 months.
+    // Trend forecast = revenue from 3 months ago compounded by MoM growth
+    // for each of the 3 intervening months. The earlier `* (1 + mom)` form
+    // applied only one month of growth to a value 3 months old, producing a
+    // systematic positive variance every month even when revenue was on-plan.
     const fva = shopifyMonthly.slice(-6).map((m: any, idx: number, arr: any[]) => {
       const prev = idx >= 3 ? arr[idx - 3] : null;
-      const trendForecast = prev ? Math.round(Number(prev.revenue ?? 0) * (1 + mom)) : null;
+      const trendForecast = prev ? Math.round(Number(prev.revenue ?? 0) * Math.pow(1 + mom, 3)) : null;
       const actual = Number(m.revenue ?? 0);
       const variance = trendForecast != null ? actual - trendForecast : null;
       const variancePct =
@@ -203,86 +248,136 @@ function ForecastPage() {
       minBuffer,
       perMarketForecast,
       forecastVsActuals: fva,
+      monthlyOpex,
+      outflowMonthLabel: String(lastOpexMonth?.month ?? lastOpexMonth?.ym ?? ""),
+      outflowSource,
     };
   }, [data]);
 
-  // Spending allowance — derived from monthly revenue & a target contribution margin
+  // Spending allowance — last completed month's actuals per category from
+  // Xero P&L (team/agencies/content/software/rent/other) plus Triple Whale
+  // ad spend. The previous implementation hard-coded "Team €63", "Software
+  // €16", "Other €40" as plain EUR (yes, €63 for the whole team) and faked
+  // the "Spent" column as `budget * 0.66` — none of it from a real source.
+  // We now derive a "budget" of last-month actuals (the most reliable
+  // capacity signal), surface the month name, and show "—" for spent since
+  // Xero only ships month-end values, not MTD by category.
   const allowance = useMemo(() => {
-    const monthRev = monthlyAvgRev || 0;
-    const flexBudget = Math.max(monthRev * 0.18, 200); // 18% of revenue available as flex
-    // Categories — Fixed values are static contracts (placeholder), Flex scale w/ revenue
-    const cats = [
+    const xero =
+      data?.xero && typeof data.xero === "object" && !data.xero.__empty && !data.xero.__error
+        ? data.xero
+        : null;
+    const opex: any[] = Array.isArray(xero?.opexByMonth) ? xero.opexByMonth : [];
+    // Pick the most recent month that has *any* opex booked — Xero often
+    // returns trailing months that are entirely zero before bookkeeping
+    // catches up. Using the latest non-empty month avoids reporting "€0
+    // budget across the board" the day after month-end.
+    const hasSpend = (m: any) =>
+      ["team", "agencies", "content", "software", "rent", "other"].some(
+        (k) => Number(m?.[k] ?? 0) > 0,
+      );
+    const baseline =
+      [...opex].reverse().find(hasSpend) ?? opex[opex.length - 1] ?? null;
+    const baselineLabel = String(baseline?.month ?? baseline?.ym ?? "last month");
+
+    // Ad spend baseline: prefer Triple Whale's last full month if present.
+    const twMarkets: any[] = Array.isArray((data as any)?.tripleWhale)
+      ? (data as any).tripleWhale.filter((m: any) => m?.live)
+      : [];
+    const adBaseline = twMarkets.reduce(
+      (s, m) => s + Number(m?.adSpend ?? 0),
+      0,
+    );
+
+    const catSpec: Array<{
+      key: string;
+      icon: any;
+      name: string;
+      sub: string;
+      type: "flex" | "fixed";
+      budget: number | null;
+      color: string;
+    }> = [
       {
         key: "ad",
         icon: Target,
         name: "Ad spend",
-        sub: "Meta, Google, TikTok",
+        sub: "Meta, Google, TikTok · Triple Whale latest range",
         type: "flex",
-        budget: Math.round(flexBudget * 0.55),
-        spent: 0,
+        budget: adBaseline > 0 ? Math.round(adBaseline) : null,
         color: "emerald",
       },
       {
         key: "team",
         icon: Users,
         name: "Team",
-        sub: "Freelancers + management fee · mostly locked in",
+        sub: `Salaries & freelancers · Xero ${baselineLabel}`,
         type: "fixed",
-        budget: 63,
-        spent: 62,
+        budget: baseline ? Math.round(Number(baseline.team ?? 0)) : null,
         color: "rose",
       },
       {
         key: "agency",
         icon: Building2,
         name: "Agencies",
-        sub: "Agency A, Agency B, Agency C",
+        sub: `External agencies · Xero ${baselineLabel}`,
         type: "flex",
-        budget: 22,
-        spent: 21,
+        budget: baseline ? Math.round(Number(baseline.agencies ?? 0)) : null,
         color: "rose",
       },
       {
         key: "content",
         icon: Clapperboard,
         name: "Content samenwerkingen",
-        sub: "Creators, content shoots, influencer fees",
+        sub: `Creators & shoots · Xero ${baselineLabel}`,
         type: "flex",
-        budget: Math.round(flexBudget * 0.22),
-        spent: 0,
+        budget: baseline ? Math.round(Number(baseline.content ?? 0)) : null,
         color: "emerald",
       },
       {
         key: "soft",
         icon: Laptop,
         name: "Software",
-        sub: "Recurring SaaS · mostly locked",
+        sub: `Recurring SaaS · Xero ${baselineLabel}`,
         type: "fixed",
-        budget: 16,
-        spent: 15,
+        budget: baseline ? Math.round(Number(baseline.software ?? 0)) : null,
         color: "amber",
       },
       {
         key: "other",
         icon: ClipboardList,
         name: "Other (rent, travel, legal)",
-        sub: "Office, legal, insurance, bank costs",
+        sub: `Rent, fulfilment fees, travel, insurance · Xero ${baselineLabel}`,
         type: "fixed",
-        budget: 40,
-        spent: 38,
+        budget: baseline
+          ? Math.round(Number(baseline.rent ?? 0) + Number(baseline.other ?? 0))
+          : null,
         color: "rose",
       },
-    ].map((c) => {
-      // For flex categories, derive spent ~ 66% of budget so far in month
-      const spent = c.type === "flex" ? Math.round(c.budget * 0.66) : c.spent;
-      const pct = c.budget > 0 ? Math.min(100, Math.round((spent / c.budget) * 100)) : 0;
-      const left = c.budget - spent;
-      return { ...c, spent, pct, left };
-    });
-    const totalBudget = cats.reduce((s, c) => s + c.budget, 0);
-    const totalSpent = cats.reduce((s, c) => s + c.spent, 0);
-    return { cats, totalBudget, totalSpent, totalLeft: totalBudget - totalSpent };
-  }, [monthlyAvgRev]);
+    ];
+
+    const cats = catSpec.map((c) => ({
+      ...c,
+      // We don't have intra-month per-category spend from Xero, so spent / pct
+      // / left are not computable. The renderer must show "—" rather than
+      // synthesize a value.
+      spent: null as number | null,
+      pct: null as number | null,
+      left: null as number | null,
+    }));
+    const totalBudget = cats.reduce(
+      (s, c) => s + (c.budget ?? 0),
+      0,
+    );
+    return {
+      cats,
+      totalBudget,
+      totalSpent: null as number | null,
+      totalLeft: null as number | null,
+      baselineLabel,
+      hasBaseline: !!baseline,
+    };
+  }, [data]);
 
   if (loading) {
     return (
@@ -589,14 +684,13 @@ function ForecastPage() {
                 </div>
                 <div className="text-right">
                   <div className="text-[10px] uppercase tracking-wide text-neutral-400">
-                    Total available
+                    Last month total
                   </div>
                   <div className="text-[24px] font-semibold tabular-nums">
                     {fmtMoney(allowance.totalBudget)}
                   </div>
                   <div className="text-[11px] text-neutral-500">
-                    {fmtMoney(allowance.totalSpent)} committed · {fmtMoney(allowance.totalLeft)}{" "}
-                    free
+                    Baseline from {allowance.baselineLabel}
                   </div>
                 </div>
               </div>
@@ -644,23 +738,19 @@ function ForecastPage() {
                         <span
                           className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${leftPill}`}
                         >
-                          {fmtMoney(c.left)} left
+                          {fmtMoney(c.budget)}
                         </span>
-                        <div className="text-[12px] text-neutral-600 mt-1 tabular-nums">
-                          {fmtMoney(c.spent)} / {fmtMoney(c.budget)}
+                        <div className="text-[11px] text-neutral-500 mt-1">
+                          {allowance.baselineLabel}
                         </div>
                       </div>
                     </div>
-                    <div className="mt-3 flex items-center gap-3">
-                      <div className="flex-1 h-1.5 rounded-full bg-neutral-100 overflow-hidden">
-                        <div
-                          className={`h-full ${barColor} rounded-full transition-all`}
-                          style={{ width: `${c.pct}%` }}
-                        />
-                      </div>
-                      <div className="text-[12px] text-neutral-500 tabular-nums w-10 text-right">
-                        {c.pct}%
-                      </div>
+                    {/* Bar removed — we don't have intra-month per-category
+                        spend, so the previous progress bar was always faked
+                        at 66% regardless of actuals. */}
+                    <div className="mt-3 h-px bg-neutral-100" />
+                    <div className="mt-2 text-[11px] text-neutral-500">
+                      Baseline only · MTD per-category spend not available from Xero
                     </div>
                   </Card>
                 );
@@ -671,11 +761,12 @@ function ForecastPage() {
               <div className="flex items-start gap-2 text-[12px] text-neutral-600">
                 <Info className="h-4 w-4 mt-0.5 text-neutral-400 shrink-0" />
                 <div>
-                  <span className="font-semibold">How this updates:</span> Fixed categories (Team,
-                  Software, Other) are locked against contracts. Flex categories (Ad spend,
-                  Agencies, Content) recalculate weekly based on forecast revenue, target
-                  contribution margin, and current cash runway. If revenue drops, flex allowances
-                  drop with it.
+                  <span className="font-semibold">How this works:</span> Each row's baseline is
+                  the previous full month's actuals booked in Xero
+                  ({allowance.baselineLabel}), plus Triple Whale's latest range total for ad
+                  spend. We don't synthesize "spent so far" or "left" — Xero only ships
+                  month-end values per category, so an honest dashboard either shows the
+                  baseline or shows nothing.
                 </div>
               </div>
             </Card>
@@ -693,34 +784,38 @@ function ForecastPage() {
                   Save scenario
                 </button>
               </div>
+              {/* Only assumptions that are actually derived from live data are
+                  shown. The previous panel mixed in hardcoded "Target ROAS",
+                  "Planned ad spend", "New hire" and "Supplier PO" rows that
+                  never changed regardless of inputs — they read as live and
+                  misled scenario planning. Add them back here only when we
+                  have a real source. */}
               <div className="mt-4 space-y-3">
-                {[
-                  {
-                    label: "Growth rate (MoM)",
-                    value: `+${trendPct}%`,
-                    sub: `Trailing trend: +${trendPct}%`,
-                  },
-                  { label: "Target ROAS", value: "4.0x", sub: "Current blended: 4.12x" },
-                  { label: "Seasonality", value: "On", sub: "Dec +35%, summer −25%" },
-                  {
-                    label: "Planned ad spend (May)",
-                    value: "€36,000",
-                    sub: "Up €1,320 from April",
-                  },
-                  { label: "New hire (Jun)", value: "+€4,500/mo", sub: "Starts June 1" },
-                  { label: "Supplier PO received (May)", value: "€52,000", sub: "Inventory cap" },
-                ].map((a) => (
-                  <div key={a.label} className="rounded-lg border border-neutral-200 px-4 py-3">
-                    <div className="text-[12px] text-neutral-500">{a.label}</div>
-                    <div className="mt-1 text-[18px] font-semibold tabular-nums">{a.value}</div>
-                    <div className="text-[11px] text-neutral-400 mt-0.5">{a.sub}</div>
+                <div className="rounded-lg border border-neutral-200 px-4 py-3">
+                  <div className="text-[12px] text-neutral-500">Growth rate (MoM)</div>
+                  <div className="mt-1 text-[18px] font-semibold tabular-nums">+{trendPct}%</div>
+                  <div className="text-[11px] text-neutral-400 mt-0.5">
+                    Trailing 3-month average vs prior 3 months
                   </div>
-                ))}
+                </div>
+                <div className="rounded-lg border border-neutral-200 px-4 py-3">
+                  <div className="text-[12px] text-neutral-500">Seasonality curve</div>
+                  <div className="mt-1 text-[18px] font-semibold tabular-nums">Applied</div>
+                  <div className="text-[11px] text-neutral-400 mt-0.5">
+                    Nov +22%, Dec +16%, Oct +12% · Jan −16%, Feb −10%
+                  </div>
+                </div>
               </div>
             </Card>
 
             <div className="mt-6 text-center text-[11px] text-neutral-400">
               Synced · {new Date().toLocaleString()} · Cash anchor: {fmtMoney(startCash)}
+              {outflowSource === "xero" && monthlyOpex > 0 && (
+                <> · Outflow baseline: {fmtMoney(monthlyOpex)}/mo from Xero {outflowMonthLabel}</>
+              )}
+              {outflowSource === "none" && (
+                <> · <span className="text-rose-500">Outflow unavailable (no Xero opex)</span></>
+              )}
             </div>
           </>
         )}
@@ -857,12 +952,26 @@ function GrowthPlan2026({ data }: { data: any }) {
     const elapsedDay = isCurrentYear ? now.getDate() : 1;
     const daysInMonth =
       currentMonthIdx >= 0 ? new Date(year, currentMonthIdx + 1, 0).getDate() : 30;
+    // Seasonality-weighted expectedPace. A naive calendar-day fraction
+    // (e.g. "we're 38% through the year, so we should be at 38% of target")
+    // disagrees with how `target` itself is built — target sums monthly
+    // values weighted by SEASONALITY, so low-season months (Jan, Feb) carry
+    // less weight. Comparing actuals against a flat calendar pace flagged
+    // stores as "Behind" in Jan/Feb when they were genuinely on plan, and
+    // "On pace" in Oct–Dec when they were quietly under. The fix: weight
+    // the elapsed share by the same SEASONALITY curve.
+    const totalSeasonWeight = SEASONALITY.reduce((s, v) => s + v, 0);
     const expectedPace = isPastYear
       ? 100
       : isCurrentYear
-        ? ((Date.UTC(year, currentMonthIdx, elapsedDay) - Date.UTC(year, 0, 1)) /
-            (Date.UTC(year + 1, 0, 1) - Date.UTC(year, 0, 1))) *
-          100
+        ? (() => {
+            let completed = 0;
+            for (let i = 0; i < currentMonthIdx; i++) completed += SEASONALITY[i];
+            const partial = (SEASONALITY[currentMonthIdx] ?? 0) * (elapsedDay / daysInMonth);
+            return totalSeasonWeight > 0
+              ? ((completed + partial) / totalSeasonWeight) * 100
+              : 0;
+          })()
         : 0;
 
     const useOverride = yearOverride?.year === year;
@@ -974,8 +1083,21 @@ function GrowthPlan2026({ data }: { data: any }) {
 
       // Dampen trend so it doesn't compound to unrealistic levels far in the future
       const dampenedTrend = clamp(trend, -0.1, 0.08);
+      // `monthly` is the FORECAST series rendered in the chart and summed
+      // into `target`. Completed months use actuals; the current (in-flight)
+      // month uses the blended `fullMonthRunRate` projection — not the raw
+      // MTD value, which would deflate `target` by half a month and make
+      // ytdPct comparisons misleading. Past years (currentMonthIdx === 11)
+      // still flow into the "actual" branch because all 12 months are real.
       const monthly = MONTHS.map((_, i) => {
-        if (i <= currentMonthIdx) return Math.round(actualByMonth[i][mk.code] || 0);
+        if (i < currentMonthIdx) return Math.round(actualByMonth[i][mk.code] || 0);
+        if (i === currentMonthIdx) {
+          if (!isCurrentYear) return Math.round(actualByMonth[i][mk.code] || 0);
+          return Math.max(
+            Math.round(currentMonthActual),
+            Math.round(fullMonthRunRate),
+          );
+        }
         const seasonalBase = SEASONALITY[currentMonthIdx] || 1;
         const monthsAhead = i - currentMonthIdx;
         // Cap compounding effect at 6 months out
@@ -986,16 +1108,36 @@ function GrowthPlan2026({ data }: { data: any }) {
         return Math.max(0, Math.round(Math.min(projected, ceiling)));
       });
       const target = monthly.reduce((s, v) => s + v, 0);
-      const actualYtd = monthly.slice(0, currentMonthIdx + 1).reduce((s, v) => s + v, 0);
+      // `actualYtd` is the *earned-so-far* number rendered as "Actual revenue
+      // YTD". It must use the raw MTD value for the in-flight month, not the
+      // full-month projection, otherwise YTD% silently overshoots reality.
+      const actualYtd = (() => {
+        let sum = 0;
+        for (let i = 0; i < currentMonthIdx; i++) {
+          sum += Math.round(actualByMonth[i][mk.code] || 0);
+        }
+        if (currentMonthIdx >= 0) {
+          sum += Math.round(
+            isCurrentYear ? currentMonthActual : actualByMonth[currentMonthIdx][mk.code] || 0,
+          );
+        }
+        return sum;
+      })();
+      // Margin + marketing ratio come from Triple Whale. TW data is only
+      // pulled for the current year (see twRows filter), so for any other
+      // year both are *null* — previously they silently fell back to hardcoded
+      // 0.18 / 0.25, which made historical "Net profit" and "Marketing"
+      // columns look like real actuals when they were just revenue × a
+      // magic number. Now we propagate null and the renderer shows "—".
       const tw = twRows.find((r: any) => r?.market === mk.code);
       const twRevenue = Number(tw?.netRevenue ?? tw?.revenue ?? 0);
       const adSpend = Number(tw?.adSpend ?? 0);
       const twNetProfit = Number(tw?.netProfit ?? 0);
-      const marketingRatio =
-        twRevenue > 0 && adSpend >= 0 ? clamp(adSpend / twRevenue, 0, 0.75) : 0.25;
-      const margin =
-        twRevenue > 0 && isFinite(twNetProfit) ? clamp(twNetProfit / twRevenue, -0.25, 0.55) : 0.18;
-      const marketing = Math.round(target * marketingRatio);
+      const marketingRatio: number | null =
+        twRevenue > 0 && adSpend >= 0 ? clamp(adSpend / twRevenue, 0, 0.75) : null;
+      const margin: number | null =
+        twRevenue > 0 && isFinite(twNetProfit) ? clamp(twNetProfit / twRevenue, -0.25, 0.55) : null;
+      const marketing = marketingRatio != null ? Math.round(target * marketingRatio) : null;
       const ytdPct = target > 0 ? (actualYtd / target) * 100 : 0;
       plan[mk.code] = {
         target,
@@ -1016,27 +1158,54 @@ function GrowthPlan2026({ data }: { data: any }) {
     for (const mk of MARKETS)
       plan[mk.code].share = totalTarget > 0 ? plan[mk.code].target / totalTarget : 0;
 
+    // Per-row marketing & net-profit derive from per-market `margin` /
+    // `marketingRatio`. When TW data is absent (any non-current year) those
+    // are null and the row contributes null too — the renderer must show "—".
+    // Mixing nulls with numbers via `??` would re-introduce the silent fake
+    // historical actuals this fix was supposed to remove.
+    const anyMarginAvailable = MARKETS.some((mk) => plan[mk.code].margin != null);
+    const anyMarketingAvailable = MARKETS.some((mk) => plan[mk.code].marketingRatio != null);
     const rows = MONTHS.map((m, i) => {
       const row: any = { m, i, isMTD: i === currentMonthIdx, isPast: i < currentMonthIdx };
       for (const mk of MARKETS) row[mk.code] = plan[mk.code].monthly[i] ?? 0;
       row.total = MARKETS.reduce((s, mk) => s + row[mk.code], 0);
-      row.marketing = MARKETS.reduce(
-        (s, mk) => s + Math.round((plan[mk.code].monthly[i] ?? 0) * plan[mk.code].marketingRatio),
-        0,
-      );
-      row.netProfit = MARKETS.reduce(
-        (s, mk) => s + Math.round((plan[mk.code].monthly[i] ?? 0) * plan[mk.code].margin),
-        0,
-      );
-      row.margin = row.total > 0 ? (row.netProfit / row.total) * 100 : 0;
+      row.marketing = anyMarketingAvailable
+        ? MARKETS.reduce(
+            (s, mk) =>
+              s +
+              (plan[mk.code].marketingRatio != null
+                ? Math.round((plan[mk.code].monthly[i] ?? 0) * plan[mk.code].marketingRatio)
+                : 0),
+            0,
+          )
+        : null;
+      row.netProfit = anyMarginAvailable
+        ? MARKETS.reduce(
+            (s, mk) =>
+              s +
+              (plan[mk.code].margin != null
+                ? Math.round((plan[mk.code].monthly[i] ?? 0) * plan[mk.code].margin)
+                : 0),
+            0,
+          )
+        : null;
+      row.margin = row.netProfit != null && row.total > 0 ? (row.netProfit / row.total) * 100 : null;
       return row;
     });
 
-    const totalMarketing = MARKETS.reduce((s, mk) => s + plan[mk.code].marketing, 0);
-    const totalNetProfit = MARKETS.reduce(
-      (s, mk) => s + plan[mk.code].target * plan[mk.code].margin,
-      0,
-    );
+    const totalMarketing = anyMarketingAvailable
+      ? MARKETS.reduce(
+          (s, mk) => s + (plan[mk.code].marketing != null ? plan[mk.code].marketing : 0),
+          0,
+        )
+      : null;
+    const totalNetProfit = anyMarginAvailable
+      ? MARKETS.reduce(
+          (s, mk) =>
+            s + (plan[mk.code].margin != null ? plan[mk.code].target * plan[mk.code].margin : 0),
+          0,
+        )
+      : null;
     const actualYtd = MARKETS.reduce((s, mk) => s + plan[mk.code].actualYtd, 0);
     const dataStart = availableDailyDates.length ? availableDailyDates.sort()[0] : null;
     const dataEnd = availableDailyDates.length ? availableDailyDates.sort().at(-1) : null;
@@ -1051,8 +1220,12 @@ function GrowthPlan2026({ data }: { data: any }) {
       totalTarget,
       totalMarketing,
       totalNetProfit,
-      blendedMargin: totalTarget > 0 ? totalNetProfit / totalTarget : 0,
-      blendedMER: totalMarketing > 0 ? totalTarget / totalMarketing : 0,
+      blendedMargin:
+        totalNetProfit != null && totalTarget > 0 ? totalNetProfit / totalTarget : null,
+      blendedMER:
+        totalMarketing != null && totalMarketing > 0 && totalTarget > 0
+          ? totalTarget / totalMarketing
+          : null,
       ytdOverall: totalTarget > 0 ? (actualYtd / totalTarget) * 100 : 0,
       actualYtd,
       dataStart,
@@ -1086,8 +1259,14 @@ function GrowthPlan2026({ data }: { data: any }) {
         { k: "Actual revenue YTD", v: fmtK(p.actualYtd) },
         { k: "Current month run-rate", v: fmtK(p.fullMonthRunRate) },
         { k: "Trailing growth", v: `${(p.trend * 100).toFixed(1)}%` },
-        { k: "Marketing / revenue", v: `${(p.marketingRatio * 100).toFixed(1)}%` },
-        { k: "Net profit margin", v: `${(p.margin * 100).toFixed(1)}%` },
+        {
+          k: "Marketing / revenue",
+          v: p.marketingRatio != null ? `${(p.marketingRatio * 100).toFixed(1)}%` : "—",
+        },
+        {
+          k: "Net profit margin",
+          v: p.margin != null ? `${(p.margin * 100).toFixed(1)}%` : "—",
+        },
       ];
       return acc;
     },
@@ -1258,23 +1437,28 @@ function GrowthPlan2026({ data }: { data: any }) {
               {fmtM(totalNetProfit)}
             </div>
             <div className="text-[11px] text-neutral-500">
-              {(blendedMargin * 100).toFixed(1)}% blended margin
+              {blendedMargin != null
+                ? `${(blendedMargin * 100).toFixed(1)}% blended margin`
+                : "Margin unavailable — Triple Whale data not synced for this year"}
             </div>
             <div className="mt-3 h-px bg-neutral-100" />
             <div className="mt-3 grid grid-cols-4 gap-2">
-              {MARKETS.map((mk) => (
-                <div key={mk.code}>
-                  <div className="text-[10px] font-semibold uppercase text-neutral-400">
-                    {mk.code}
+              {MARKETS.map((mk) => {
+                const m = plan[mk.code].margin;
+                return (
+                  <div key={mk.code}>
+                    <div className="text-[10px] font-semibold uppercase text-neutral-400">
+                      {mk.code}
+                    </div>
+                    <div className="text-[14px] font-semibold tabular-nums mt-0.5">
+                      {m != null ? fmtM(plan[mk.code].target * m) : "—"}
+                    </div>
+                    <div className="text-[10px] text-neutral-400">
+                      {m != null ? `${Math.round(m * 100)}%` : "—"}
+                    </div>
                   </div>
-                  <div className="text-[14px] font-semibold tabular-nums mt-0.5">
-                    {fmtM(plan[mk.code].target * plan[mk.code].margin)}
-                  </div>
-                  <div className="text-[10px] text-neutral-400">
-                    {Math.round(plan[mk.code].margin * 100)}%
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
           <div className="md:border-l md:border-neutral-100 md:pl-6">
@@ -1284,22 +1468,29 @@ function GrowthPlan2026({ data }: { data: any }) {
             <div className="mt-1 text-[22px] font-semibold tabular-nums">
               {fmtM(totalMarketing)}
             </div>
-            <div className="text-[11px] text-neutral-500">Blended MER {blendedMER.toFixed(2)}×</div>
+            <div className="text-[11px] text-neutral-500">
+              {blendedMER != null
+                ? `Blended MER ${blendedMER.toFixed(2)}×`
+                : "MER unavailable — Triple Whale data not synced for this year"}
+            </div>
             <div className="mt-3 h-px bg-neutral-100" />
             <div className="mt-3 grid grid-cols-4 gap-2">
-              {MARKETS.map((mk) => (
-                <div key={mk.code}>
-                  <div className="text-[10px] font-semibold uppercase text-neutral-400">
-                    {mk.code}
+              {MARKETS.map((mk) => {
+                const mr = plan[mk.code].marketingRatio;
+                return (
+                  <div key={mk.code}>
+                    <div className="text-[10px] font-semibold uppercase text-neutral-400">
+                      {mk.code}
+                    </div>
+                    <div className="text-[14px] font-semibold tabular-nums mt-0.5">
+                      {plan[mk.code].marketing != null ? fmtM(plan[mk.code].marketing) : "—"}
+                    </div>
+                    <div className="text-[10px] text-neutral-400">
+                      {mr != null ? `${Math.round(mr * 100)}%` : "—"}
+                    </div>
                   </div>
-                  <div className="text-[14px] font-semibold tabular-nums mt-0.5">
-                    {fmtM(plan[mk.code].marketing)}
-                  </div>
-                  <div className="text-[10px] text-neutral-400">
-                    {Math.round(plan[mk.code].marketingRatio * 100)}%
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -1336,12 +1527,18 @@ function GrowthPlan2026({ data }: { data: any }) {
             <ComposedChart
               data={rows.map((r) => {
                 if (metric === "revenue") return { m: r.m, NL: r.NL, UK: r.UK, US: r.US };
+                // When margin / marketingRatio are null (TW data missing for
+                // the selected year) the bar simply contributes 0 — the
+                // legend + tile copy already announces "data not synced",
+                // and any non-zero magic number would be a lie.
                 if (metric === "marketing") {
                   return Object.fromEntries([
                     ["m", r.m],
                     ...MARKETS.map((mk) => [
                       mk.code,
-                      Math.round((r[mk.code] ?? 0) * plan[mk.code].marketingRatio),
+                      plan[mk.code].marketingRatio != null
+                        ? Math.round((r[mk.code] ?? 0) * plan[mk.code].marketingRatio)
+                        : 0,
                     ]),
                   ]);
                 }
@@ -1349,7 +1546,9 @@ function GrowthPlan2026({ data }: { data: any }) {
                   ["m", r.m],
                   ...MARKETS.map((mk) => [
                     mk.code,
-                    Math.round((r[mk.code] ?? 0) * plan[mk.code].margin),
+                    plan[mk.code].margin != null
+                      ? Math.round((r[mk.code] ?? 0) * plan[mk.code].margin)
+                      : 0,
                   ]),
                 ]);
               })}
@@ -1405,7 +1604,13 @@ function GrowthPlan2026({ data }: { data: any }) {
                 const rowBg = r.isMTD ? "bg-amber-50/40" : "";
                 const txt = dim ? "text-neutral-400" : "text-neutral-700";
                 const profitTxt =
-                  r.netProfit < 0 ? "text-rose-600" : dim ? "text-emerald-400" : "text-emerald-600";
+                  r.netProfit == null
+                    ? "text-neutral-400"
+                    : r.netProfit < 0
+                      ? "text-rose-600"
+                      : dim
+                        ? "text-emerald-400"
+                        : "text-emerald-600";
                 return (
                   <tr key={r.m} className={`border-b border-neutral-100 last:border-0 ${rowBg}`}>
                     <td className={`py-2.5 pr-3 ${txt}`}>
@@ -1419,8 +1624,11 @@ function GrowthPlan2026({ data }: { data: any }) {
                         )}
                         <span className="font-medium">{r.m}</span>
                         {r.isMTD && (
-                          <span className="rounded bg-amber-100 text-amber-700 px-1.5 py-0.5 text-[9px] font-semibold uppercase">
-                            MTD
+                          <span
+                            className="rounded bg-amber-100 text-amber-700 px-1.5 py-0.5 text-[9px] font-semibold uppercase"
+                            title="Full-month projection — blends actual MTD with the 3-month completed-month average. Actual MTD-only is summed into the YTD totals."
+                          >
+                            PROJ
                           </span>
                         )}
                       </span>
@@ -1436,17 +1644,27 @@ function GrowthPlan2026({ data }: { data: any }) {
                       {fmtK(r.total)}
                     </td>
                     <td className={`py-2.5 px-3 text-right tabular-nums ${txt}`}>
-                      {fmtK(r.marketing)}
+                      {r.marketing != null ? fmtK(r.marketing) : "—"}
                     </td>
                     <td className={`py-2.5 px-3 text-right tabular-nums font-medium ${profitTxt}`}>
-                      {r.netProfit < 0
-                        ? `-€${Math.abs(Math.round(r.netProfit / 1000))}k`
-                        : fmtK(r.netProfit)}
+                      {r.netProfit == null
+                        ? "—"
+                        : r.netProfit < 0
+                          ? `-€${Math.abs(Math.round(r.netProfit / 1000))}k`
+                          : fmtK(r.netProfit)}
                     </td>
                     <td
-                      className={`py-2.5 pl-3 text-right tabular-nums ${r.margin < 0 ? "text-rose-600" : dim ? "text-neutral-400" : "text-neutral-700"}`}
+                      className={`py-2.5 pl-3 text-right tabular-nums ${
+                        r.margin == null
+                          ? "text-neutral-400"
+                          : r.margin < 0
+                            ? "text-rose-600"
+                            : dim
+                              ? "text-neutral-400"
+                              : "text-neutral-700"
+                      }`}
                     >
-                      {r.margin.toFixed(1)}%
+                      {r.margin != null ? `${r.margin.toFixed(1)}%` : "—"}
                     </td>
                   </tr>
                 );
