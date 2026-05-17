@@ -3528,29 +3528,26 @@ export async function fetchXero() {
 //
 // Full-scope Jortt integration — uses ALL scopes the OAuth client has access to.
 // Per the Jortt docs (https://developer.jortt.nl/#scopes) the client_credentials
-// flow supports these scopes (one token per scope, since multi-scope requests
-// fail with invalid_scope):
-//
-//   invoices:read       customers:read      estimates:read
-//   expenses:read       financing:read      organizations:read
-//   payroll:read        reports:read
-//
-// Each scope is requested independently; scopes that fail are logged but don't
-// abort the overall fetch. With expenses:read granted the OpEx breakdown is
-// built from real purchase invoices instead of being empty.
+// flow supports these scopes. Earlier the comment in this file claimed
+// multi-scope grants failed with `invalid_scope`, but live testing against
+// Jortt's prod token endpoint proves a single request with all scopes
+// space-separated works fine, in the exact order below — so we now do ONE
+// token round-trip per sync instead of 8.
 
 const JORTT_BASE = "https://api.jortt.nl";
 const JORTT_TOKEN_URL = "https://app.jortt.nl/oauth-provider/oauth/token";
 
+// Order matters — Jortt validates this exact list. Don't reshuffle without
+// re-testing against the live token endpoint.
 const JORTT_ALL_SCOPES = [
-  "invoices:read",
   "expenses:read",
-  "reports:read",
-  "customers:read",
+  "estimates:read",
   "financing:read",
+  "customers:read",
+  "invoices:read",
+  "reports:read",
   "organizations:read",
   "payroll:read",
-  "estimates:read",
 ] as const;
 
 // OpEx categorisation.
@@ -3764,28 +3761,44 @@ function monthIsoKey(dateStr: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-// Get an access_token for ONE scope. Two auth strategies:
+// Get a SINGLE access_token covering every scope we use, plus the set of
+// scopes Jortt actually granted. Two auth strategies:
 //
-//   1. JORTT_API_TOKEN (preferred) — a personal API token / bearer string
-//      from the Jortt UI. It carries the full account's permissions and works
-//      against the user's real books. We reuse the same token for every
-//      scope, which collapses 8 token-endpoint round trips into zero.
+//   1. JORTT_API_TOKEN (preferred) — personal bearer token from the Jortt
+//      UI. Covers the full account regardless of scope grants. We treat
+//      every scope as granted, since the token isn't scope-bound.
 //
-//   2. JORTT_CLIENT_ID + JORTT_CLIENT_SECRET (legacy) — OAuth
-//      client_credentials, one token per scope. The grant returns a token
-//      bound to whichever organization the OAuth client was created in,
-//      which is often an empty sandbox tenant separate from the user's real
-//      books — symptoms include "all scopes granted but list endpoints
-//      empty / organization null / bank_accounts: []".
-async function getJorttTokenForScope(scope: string): Promise<string | null> {
+//   2. JORTT_CLIENT_ID + JORTT_CLIENT_SECRET — OAuth client_credentials.
+//      Now requested with the full space-separated scope list in one go.
+//      Jortt's response includes `scope` listing what was actually granted;
+//      we trust that, falling back to "all requested" if the field is absent.
+//
+// Memoized per process so 8 downstream `getJorttTokenForScope("...")` calls
+// inside a single sync collapse to one HTTP request to the token endpoint.
+type JorttTokenBundle = { token: string; grantedScopes: Set<string> };
+let __jorttTokenCache: { bundle: JorttTokenBundle | null; expiresAt: number } | null = null;
+
+async function getJorttMultiScopeToken(): Promise<JorttTokenBundle | null> {
+  if (__jorttTokenCache && Date.now() < __jorttTokenCache.expiresAt) {
+    return __jorttTokenCache.bundle;
+  }
+
   const personalToken = process.env.JORTT_API_TOKEN;
   if (personalToken && personalToken.trim().length > 0) {
-    return personalToken.trim();
+    const bundle: JorttTokenBundle = {
+      token: personalToken.trim(),
+      grantedScopes: new Set(JORTT_ALL_SCOPES),
+    };
+    __jorttTokenCache = { bundle, expiresAt: Date.now() + 50 * 60 * 1000 };
+    return bundle;
   }
 
   const clientId = process.env.JORTT_CLIENT_ID;
   const clientSecret = process.env.JORTT_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
+  if (!clientId || !clientSecret) {
+    __jorttTokenCache = { bundle: null, expiresAt: Date.now() + 30 * 1000 };
+    return null;
+  }
 
   try {
     const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
@@ -3795,21 +3808,53 @@ async function getJorttTokenForScope(scope: string): Promise<string | null> {
         Authorization: `Basic ${basic}`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: new URLSearchParams({ grant_type: "client_credentials", scope }).toString(),
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        scope: JORTT_ALL_SCOPES.join(" "),
+      }).toString(),
       cache: "no-store",
     });
 
     if (!res.ok) {
       const err = await res.text();
-      console.warn(`[Jortt] token (scope=${scope}) ${res.status}: ${err.slice(0, 160)}`);
+      console.warn(`[Jortt] multi-scope token ${res.status}: ${err.slice(0, 200)}`);
+      __jorttTokenCache = { bundle: null, expiresAt: Date.now() + 30 * 1000 };
       return null;
     }
     const json: any = await res.json();
-    return json.access_token ?? null;
+    const access = json?.access_token;
+    if (!access) {
+      __jorttTokenCache = { bundle: null, expiresAt: Date.now() + 30 * 1000 };
+      return null;
+    }
+    const grantedRaw: string = String(json?.scope ?? JORTT_ALL_SCOPES.join(" "));
+    const grantedScopes = new Set(
+      grantedRaw
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    // expires_in is seconds; refresh 5 minutes before the real expiry so a
+    // long sync never trips on a half-second-stale token.
+    const ttlSec = Math.max(60, Number(json?.expires_in ?? 3600));
+    const bundle: JorttTokenBundle = { token: access, grantedScopes };
+    __jorttTokenCache = { bundle, expiresAt: Date.now() + (ttlSec - 300) * 1000 };
+    return bundle;
   } catch (err: any) {
-    console.error(`[Jortt] token (scope=${scope}) failed:`, err.message);
+    console.error(`[Jortt] multi-scope token failed:`, err.message);
+    __jorttTokenCache = { bundle: null, expiresAt: Date.now() + 30 * 1000 };
     return null;
   }
+}
+
+// Back-compat shim — call sites still ask per-scope, but every scope now
+// resolves to the same memoized multi-scope token. Returns null if Jortt
+// didn't grant that scope (the call site already checks `if (tokens[s])`).
+async function getJorttTokenForScope(scope: string): Promise<string | null> {
+  const bundle = await getJorttMultiScopeToken();
+  if (!bundle) return null;
+  if (!bundle.grantedScopes.has(scope)) return null;
+  return bundle.token;
 }
 
 // Page through a Jortt list endpoint with the given token. Stops on first
@@ -3951,6 +3996,62 @@ export async function fetchJortt() {
       if (!id) continue;
       const tx = await jorttPaginate(t, `/v3/bank_accounts/${id}/transactions`, 5);
       bankTransactions.push(...tx.map((x: any) => ({ ...x, _bank_account_id: id })));
+    }
+  }
+
+  // /v3/bank_accounts is gated for some Jortt tenants (paid plan / scope
+  // mismatch) and silently returns []. The /v1/reports/summaries/cash_and_bank
+  // report DOES include every bank + ledger cash account though, so when v3
+  // gives us nothing we synthesize bankAccounts from that report. Jortt
+  // ships per-account rows under one of several keys depending on tenant /
+  // API version — we try them all and normalise to the shape the
+  // dashboard's BankRow component already understands
+  // (`{ name, balance, currency }`).
+  if (bankAccounts.length === 0 && cashRes) {
+    const root = cashRes?.data && typeof cashRes.data === "object" ? cashRes.data : cashRes;
+    const candidateArrays = [
+      root?.accounts,
+      root?.bank_accounts,
+      root?.banks,
+      root?.cash_accounts,
+      root?.cash_and_bank,
+      root?.rows,
+      root?.items,
+    ].filter(Array.isArray);
+    const collected: any[] = [];
+    for (const arr of candidateArrays) {
+      for (const row of arr) {
+        const name =
+          row?.name ??
+          row?.account_name ??
+          row?.label ??
+          row?.description ??
+          row?.iban ??
+          null;
+        if (!name) continue;
+        const rawBalance =
+          row?.balance?.value ??
+          row?.balance ??
+          row?.current_balance?.value ??
+          row?.current_balance ??
+          row?.amount?.value ??
+          row?.amount ??
+          row?.total?.value ??
+          row?.total ??
+          0;
+        const balance = parseFloat(String(rawBalance));
+        if (!Number.isFinite(balance)) continue;
+        const currency = String(
+          row?.balance?.currency ?? row?.currency ?? row?.amount?.currency ?? "EUR",
+        );
+        collected.push({ name: String(name), balance, currency });
+      }
+    }
+    if (collected.length > 0) {
+      console.info(
+        `[Jortt] /v3/bank_accounts was empty — derived ${collected.length} accounts from cash_and_bank report`,
+      );
+      bankAccounts = collected;
     }
   }
 
