@@ -115,17 +115,72 @@ function ForecastPage() {
         : null;
     const minBuffer = Number((data as any)?.manual?.settings?.min_cash_buffer_eur?.amount ?? 0);
 
-    const lastN = shopifyMonthly.slice(-3);
-    const avgRev = lastN.length
-      ? lastN.reduce((s, r) => s + (r.revenue ?? 0), 0) / lastN.length
-      : 0;
-    const prevN = shopifyMonthly.slice(-6, -3);
-    const prevAvg = prevN.length
-      ? prevN.reduce((s, r) => s + (r.revenue ?? 0), 0) / prevN.length
-      : avgRev;
-    const mom = prevAvg > 0 ? (avgRev - prevAvg) / prevAvg : 0.04;
+    // MoM growth: prefer a 3-vs-3-month window, but progressively fall back
+    // when there isn't enough history. With only 3 Shopify months booked
+    // (e.g. fresh tenants like Zapply NL right after Xero reconnect) the
+    // old code computed prev=current → 0% growth and the entire forecast
+    // went flat. Try 3v3 → 2v2 → 1v1 → 0% as last resort.
+    const monthRev = (m: any) => Number(m?.revenue ?? 0);
+    const avgWindow = (arr: any[]) =>
+      arr.length ? arr.reduce((s, r) => s + monthRev(r), 0) / arr.length : 0;
+    let mom = 0;
+    let avgRev = 0;
+    for (const w of [3, 2, 1] as const) {
+      const lastSlice = shopifyMonthly.slice(-w);
+      const prevSlice = shopifyMonthly.slice(-2 * w, -w);
+      const curAvg = avgWindow(lastSlice);
+      const prAvg = avgWindow(prevSlice);
+      if (curAvg > 0 && prAvg > 0) {
+        avgRev = curAvg;
+        mom = (curAvg - prAvg) / prAvg;
+        break;
+      }
+      if (curAvg > 0 && avgRev === 0) avgRev = curAvg; // keep best-known avg
+    }
 
-    const cash0 = xero?.cashBalance ?? 0;
+    // Cash anchor: the negative xero.cashBalance Zapply NL ships includes
+    // accrual liabilities (negative working capital) that aren't an actual
+    // cash position. Mirror the Balance Sheet pillar's merge — sum real
+    // bank balances from Xero + Jortt, plus pending platform payouts
+    // (Shopify / PayPal / Mollie / etc.). This is the genuine cash on hand
+    // available to fund the 13 weeks ahead.
+    const cash0 = (() => {
+      const jortt =
+        data?.jortt && typeof data.jortt === "object" && !data.jortt.__empty && !data.jortt.__error
+          ? data.jortt
+          : null;
+      const xeroBanks = Array.isArray(xero?.bankAccounts) ? xero.bankAccounts : [];
+      const jorttBanks = Array.isArray(jortt?.bankAccounts) ? jortt.bankAccounts : [];
+      const sumBalance = (rows: any[]) =>
+        rows.reduce((s, b) => s + (Number(b?.balance ?? 0) || 0), 0);
+      const bankTotal = sumBalance(xeroBanks) + sumBalance(jorttBanks);
+      // Platform payouts pending — collapse Shopify/PayPal/Mollie into a
+      // single cash-now figure.
+      const sp = Array.isArray(data?.shopifyPayouts?.markets) ? data.shopifyPayouts.markets : [];
+      const platformTotal =
+        sp.reduce(
+          (s: number, m: any) =>
+            s + Number(m?.pendingBalance ?? 0) + Number(m?.scheduledPayouts ?? 0),
+          0,
+        ) +
+        (Array.isArray(data?.paypalBalances?.accounts)
+          ? data.paypalBalances.accounts.reduce(
+              (s: number, a: any) => s + Number(a?.balance ?? 0),
+              0,
+            )
+          : 0) +
+        (Array.isArray(data?.mollieBalances?.accounts)
+          ? data.mollieBalances.accounts.reduce(
+              (s: number, a: any) => s + Number(a?.balance ?? 0),
+              0,
+            )
+          : 0);
+      const merged = bankTotal + platformTotal;
+      // Only fall back to xero.cashBalance when we have literally no other
+      // source — the negative figure is real but bad UX as the chart anchor.
+      if (merged !== 0 || bankTotal !== 0 || platformTotal !== 0) return merged;
+      return Number(xero?.cashBalance ?? jortt?.cashBalance ?? 0) || 0;
+    })();
     // Weekly INFLOW model:
     //   baseInflow = trailing-3-month avg revenue / 4.33 weeks per month.
     //   Compounded each week by mom/4.33 so a +12% MoM trend becomes the
@@ -190,7 +245,25 @@ function ForecastPage() {
     const totalIn = rows.reduce((s, r) => s + r.inflow, 0);
     const totalOut = rows.reduce((s, r) => s + r.outflow, 0);
 
-    // Per-market 13-week forecast (rev + share + projected EBITDA at avg margin)
+    // Per-market 13-week forecast (rev + share + projected EBITDA at avg margin).
+    // Margin source priority:
+    //   1. shopifyMarkets[].contributionMarginPct — set by ranges that
+    //      include both Shopify revenue and TW ad-spend
+    //   2. TripleWhale netProfit / revenue  — covers most current ranges
+    //   3. TripleWhale grossProfit / revenue  — fallback for older payloads
+    //   4. null → row renders "—" instead of fake 0
+    const twRows: any[] = Array.isArray(data?.tripleWhale)
+      ? data.tripleWhale.filter((m: any) => m?.live !== false)
+      : [];
+    const marginForMarket = (code: string): number | null => {
+      const tw = twRows.find((r) => r?.market === code);
+      if (!tw) return null;
+      const rev = Number(tw.revenue ?? 0);
+      if (!(rev > 0)) return null;
+      if (Number.isFinite(Number(tw.netProfit))) return (Number(tw.netProfit) / rev) * 100;
+      if (Number.isFinite(Number(tw.grossProfit))) return (Number(tw.grossProfit) / rev) * 100;
+      return null;
+    };
     const totalMarketsRev = shopifyMarkets.reduce(
       (s: number, m: any) => s + Number(m?.revenue ?? 0),
       0,
@@ -200,8 +273,14 @@ function ForecastPage() {
       .map((m: any) => {
         const share = totalMarketsRev > 0 ? Number(m.revenue) / totalMarketsRev : 0;
         const project13w = Math.round(totalIn * share);
-        const margin = Number(m?.contributionMarginPct ?? m?.marginPct ?? 0);
-        const projectedCM = Math.round(project13w * (margin / 100));
+        const inlineMargin =
+          m?.contributionMarginPct ?? m?.marginPct ?? null;
+        const margin: number | null =
+          inlineMargin != null && Number.isFinite(Number(inlineMargin))
+            ? Number(inlineMargin)
+            : marginForMarket(String(m?.code ?? m?.market ?? ""));
+        const projectedCM =
+          margin != null ? Math.round(project13w * (margin / 100)) : null;
         return {
           name: String(m?.name ?? m?.market ?? "Market"),
           share,
