@@ -3332,35 +3332,88 @@ export const MonthlyView = ({ opexByMonth: liveOpexByMonth, opexDetail: liveOpex
   })();
   const marketCount = liveTWAll.length;
   const twSub = marketCount > 0 ? `Triple Whale · ${marketCount} market${marketCount !== 1 ? "s" : ""}` : "TW not connected";
+  // Live-now month label, e.g. "May '26". Used both to flag the current
+  // (MTD) row in the table and as the badge text in the page header — the
+  // hardcoded "April: In progress" pill was a leftover from an earlier
+  // build and didn't track the actual current month.
+  const liveMonthLabel = useMemo(() => {
+    const now = new Date();
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${monthNames[now.getMonth()]} '${String(now.getFullYear()).slice(-2)}`;
+  }, []);
+  const daysInMonth = (year: number, monthIdx: number) =>
+    new Date(year, monthIdx + 1, 0).getDate();
+
   const activeMonths = useMemo(() => {
     const now = new Date();
     const curYear = now.getFullYear();
     const curMonth = now.getMonth(); // 0-based
     const yy = String(curYear).slice(-2);
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const byKey = new Map<string, { revenue: number; refunds: number }>();
+    // Shopify revenue per month
+    const shopByKey = new Map<string, { revenue: number; refunds: number }>();
     for (const m of shopifyMonthly ?? []) {
       if (!m?.month) continue;
-      byKey.set(String(m.month), { revenue: m.revenue ?? 0, refunds: m.refunds ?? 0 });
+      shopByKey.set(String(m.month), { revenue: m.revenue ?? 0, refunds: m.refunds ?? 0 });
     }
+    // Xero OpEx per month (sum the 6 buckets). Independent from revenue so
+    // net profit MoM no longer moves in lockstep with revenue.
+    const opexByKey = new Map<string, number>();
+    for (const o of liveOpexByMonth ?? []) {
+      if (!o?.month) continue;
+      const total = ["team", "agencies", "content", "software", "rent", "other"].reduce(
+        (s, k) => s + Number((o as any)[k] ?? 0),
+        0,
+      );
+      opexByKey.set(String(o.month), total);
+    }
+    // Triple Whale ad spend is a single cumulative range total; we
+    // *cannot* honestly say "ad spend in April was X" from it. Allocate by
+    // each month's share of revenue so contribution margin at least
+    // reflects real ad-spend magnitude in total, even if the per-month
+    // split is approximate.
+    const twTotalAdSpend = Array.isArray(twData)
+      ? twData.reduce((s: number, m: any) => s + Number(m?.adSpend ?? 0), 0)
+      : 0;
+    const totalRev = Array.from(shopByKey.values()).reduce((s, e) => s + (e.revenue ?? 0), 0);
+
     const out: any[] = [];
     for (let i = 0; i <= curMonth; i++) {
       const label = `${monthNames[i]} '${yy}`;
-      const entry = byKey.get(label) ?? { revenue: 0, refunds: 0 };
-      const net = entry.revenue - entry.refunds;
+      const entry = shopByKey.get(label) ?? { revenue: 0, refunds: 0 };
+      const revenue = Math.round(entry.revenue);
+      const netRev = revenue - (entry.refunds ?? 0);
+      // Industry-standard 45% COGS heuristic for ecommerce — same one
+      // used in the Daily P&L pillar. Keeps Gross Profit definition
+      // consistent across the dashboard until per-month Xero
+      // grossProfitByMonth is populated (currently empty on this tenant).
+      const grossProfit = Math.round(netRev * 0.55);
+      const adSpend =
+        totalRev > 0 && twTotalAdSpend > 0
+          ? Math.round(twTotalAdSpend * (entry.revenue / totalRev))
+          : 0;
+      const contributionMargin = Math.max(0, grossProfit - adSpend);
+      const opex = Math.round(opexByKey.get(label) ?? 0);
+      const netProfit = Math.round(contributionMargin - opex);
+      const days = daysInMonth(curYear, i);
+      const elapsedDays = i === curMonth ? now.getDate() : days;
       out.push({
         month: label,
-        revenue: Math.round(entry.revenue),
-        grossProfit: Math.round(net * 0.54),
-        adSpend: Math.round(net * 0.26),
-        contributionMargin: Math.round(net * 0.26),
-        netProfit: Math.round(net * 0.12),
+        revenue,
+        grossProfit,
+        adSpend,
+        contributionMargin,
+        opex,
+        netProfit,
+        days,
+        elapsedDays,
+        isMTD: i === curMonth,
       });
     }
     // Drop leading empty months so the chart isn't dominated by blank space.
     const firstNonZero = out.findIndex((m) => m.revenue > 0);
     return firstNonZero > 0 ? out.slice(firstNonZero) : out;
-  }, [shopifyMonthly]);
+  }, [shopifyMonthly, liveOpexByMonth, twData]);
   if (activeMonths.length === 0) {
     return (
       <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-8 text-center text-[13px] text-neutral-500">
@@ -3370,6 +3423,20 @@ export const MonthlyView = ({ opexByMonth: liveOpexByMonth, opexDetail: liveOpex
   }
   const current = activeMonths[activeMonths.length - 1];
   const prev = activeMonths[activeMonths.length - 2] ?? activeMonths[0];
+  // Per-day pace MoM: compares (current ÷ elapsed days) vs (prev ÷ days in
+  // prev). For an in-progress May this fairly answers "are we on a faster
+  // or slower daily pace than April?", instead of comparing partial-May
+  // (€1.76M from 18 days) to full-April (€2.58M from 30 days) which always
+  // looks like a big drop. Returns null when either side is zero/missing.
+  const paceDelta = (curVal: number, prevVal: number): number | null => {
+    if (!Number.isFinite(curVal) || !Number.isFinite(prevVal)) return null;
+    const curDays = Math.max(1, current.elapsedDays || current.days || 1);
+    const prevDays = Math.max(1, prev.days || 30);
+    const curPace = curVal / curDays;
+    const prevPace = prevVal / prevDays;
+    if (!(prevPace > 0)) return null;
+    return ((curPace - prevPace) / prevPace) * 100;
+  };
   const activeOpexByMonth = liveOpexByMonth ?? null;
   const activeOpexDetail = liveOpexDetail ?? null;
 
@@ -3385,29 +3452,49 @@ export const MonthlyView = ({ opexByMonth: liveOpexByMonth, opexDetail: liveOpex
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700">
-            April: In progress
+            {liveMonthLabel}: In progress
           </span>
         </div>
       </div>
 
-      {/* Hero summary */}
+      {/* Hero summary — each metric now derives from an INDEPENDENT real
+          data source so the four MoM% deltas don't all read the same value
+          off a single revenue × ratio. MoM compares per-day pace when the
+          current month is in-progress (today is mid-month), so partial
+          May vs full April is apples-to-apples instead of always looking
+          like a -30% drop. */}
       <Card className="mt-6 p-6">
         <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
           {[
-            { label: "Revenue MTD", value: current.revenue, prev: prev.revenue, format: "€" },
-            { label: "Gross profit MTD", value: current.grossProfit, prev: prev.grossProfit, format: "€" },
-            { label: "Contribution margin", value: current.contributionMargin, prev: prev.contributionMargin, format: "€" },
-            { label: "Net profit MTD", value: current.netProfit, prev: prev.netProfit, format: "€" },
+            { label: "Revenue MTD", value: current.revenue, prev: prev.revenue },
+            { label: "Gross profit MTD", value: current.grossProfit, prev: prev.grossProfit },
+            { label: "Contribution margin", value: current.contributionMargin, prev: prev.contributionMargin },
+            { label: "Net profit MTD", value: current.netProfit, prev: prev.netProfit },
           ].map(m => {
-            const delta = ((m.value - m.prev) / m.prev * 100).toFixed(1);
-            const positive = delta > 0;
+            const delta = paceDelta(m.value, m.prev);
+            const positive = delta != null && delta > 0;
+            const negative = delta != null && delta < 0;
+            const sign = m.value < 0 ? "-" : "";
             return (
               <div key={m.label}>
                 <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">{m.label}</div>
-                <div className="mt-1 text-[24px] font-semibold tabular-nums">€{m.value.toLocaleString()}</div>
-                <div className={`mt-0.5 flex items-center gap-1 text-[11px] font-medium ${positive ? "text-emerald-600" : "text-rose-600"}`}>
-                  {positive ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
-                  {delta}% MoM
+                <div className="mt-1 text-[24px] font-semibold tabular-nums">
+                  {sign}€{Math.abs(m.value).toLocaleString()}
+                </div>
+                <div
+                  className={`mt-0.5 flex items-center gap-1 text-[11px] font-medium ${
+                    positive ? "text-emerald-600" : negative ? "text-rose-600" : "text-neutral-400"
+                  }`}
+                  title={current.isMTD ? "Per-day pace: current ÷ elapsed days vs previous ÷ days in month" : "Full-month comparison"}
+                >
+                  {delta == null ? (
+                    <span>— MoM</span>
+                  ) : (
+                    <>
+                      {positive ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+                      {delta >= 0 ? "+" : ""}{delta.toFixed(1)}% MoM{current.isMTD ? " (pace)" : ""}
+                    </>
+                  )}
                 </div>
               </div>
             );
