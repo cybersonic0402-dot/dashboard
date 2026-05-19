@@ -347,6 +347,21 @@ function SyncStatusPage() {
     return () => clearInterval(id);
   }, []);
 
+  // Detect Xero "needs reconnect" state. Surface a high-visibility banner
+  // when the stored refresh token has been invalidated (Xero refresh tokens
+  // are single-use — if the saved one is dead, every sync 400s with
+  // invalid_grant and nothing else recovers without a user-driven reconnect).
+  // We treat any Xero __error mentioning "auth", "invalid_grant", "refresh",
+  // or "reconnect" as a reconnect-required state. Other Xero errors stay
+  // inside the regular connector card.
+  const xeroPayload: any = data?.xero ?? null;
+  const xeroErrMsg: string | null =
+    xeroPayload && typeof xeroPayload === "object" && xeroPayload.__error
+      ? String(xeroPayload.message ?? "")
+      : null;
+  const xeroNeedsReconnect =
+    !!xeroErrMsg && /invalid_grant|refresh token|reconnect|auth failed|disconnect/i.test(xeroErrMsg);
+
   return (
     <DashboardShell user={user} title="Sync status">
       <div className="px-6 py-6 space-y-4 max-w-[1240px] mx-auto w-full">
@@ -366,6 +381,40 @@ function SyncStatusPage() {
             Sync all now
           </button>
         </div>
+
+        {/* Xero reconnect banner — appears whenever the stored refresh token
+            is dead. The full message from the fetcher is shown so the user
+            can confirm it really is an auth issue, not a transient one. */}
+        {xeroNeedsReconnect && (
+          <div className="rounded-xl border border-red-300 bg-red-50 p-4">
+            <div className="flex items-start gap-3 flex-wrap">
+              <div className="grid h-9 w-9 place-items-center rounded-lg bg-red-100 shrink-0">
+                <Plug className="h-4 w-4 text-red-700" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[14px] font-semibold text-red-900">
+                  Xero needs to be reconnected
+                </div>
+                <div className="mt-0.5 text-[12px] text-red-800/90">
+                  The stored Xero refresh token has expired or been revoked. Sync has
+                  stopped and every Xero-dependent tile will fall back to cached or empty
+                  data until you reauthorise.
+                </div>
+                {xeroErrMsg && (
+                  <div className="mt-2 rounded bg-white/60 px-2 py-1.5 text-[11px] font-mono text-red-900/80 break-words">
+                    {xeroErrMsg.slice(0, 280)}
+                  </div>
+                )}
+              </div>
+              <a
+                href="/api/auth/xero"
+                className="shrink-0 inline-flex items-center gap-2 rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-red-700"
+              >
+                Reconnect Xero
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Connector cards */}
         <div className="space-y-3">
