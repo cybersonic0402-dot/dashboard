@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   Waves,
   FileText,
+  Briefcase,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -45,6 +46,7 @@ const pillarItems: NavItem[] = [
   { to: "/pillars/monthly-overview", label: "Monthly overview", icon: CalendarDays },
   { to: "/pillars/balance-sheet", label: "Balance sheet", icon: Scale },
   { to: "/pillars/forecast", label: "Forecast", icon: LineChart },
+  { to: "/pillars/valuation", label: "Business valuation", icon: Briefcase },
 ];
 
 const operationsItems: NavItem[] = [
@@ -135,7 +137,7 @@ function AppSidebar({ user }: { user: { name: string; email: string; avatar: str
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>The 5 Pillars</SidebarGroupLabel>
+          <SidebarGroupLabel>The 6 Pillars</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {pillarItems.map((item) => {

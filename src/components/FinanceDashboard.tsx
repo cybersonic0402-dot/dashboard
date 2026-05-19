@@ -4569,7 +4569,7 @@ export default function FinanceDashboard({ user = null, liveData = null, connect
           <nav className="sticky top-[72px] space-y-0.5">
             <div className="px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">Dashboard</div>
             <NavItem icon={LayoutDashboard} label="Overview" active={view === "overview"} onClick={() => setView("overview")} />
-            <div className="pt-3 px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">The 5 Pillars</div>
+            <div className="pt-3 px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">The 6 Pillars</div>
             <NavItem icon={Zap} label="Daily P&L" active={view === "daily"} onClick={() => setView("daily")} />
             <NavItem icon={Globe} label="Margin per market" active={view === "markets"} onClick={() => setView("markets")} />
             <NavItem icon={CalendarDays} label="Monthly overview" active={view === "monthly"} onClick={() => setView("monthly")} />

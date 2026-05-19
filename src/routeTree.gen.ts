@@ -17,6 +17,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as InvoicesRouteImport } from './routes/invoices'
 import { Route as AccountingRouteImport } from './routes/accounting'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as PillarsValuationRouteImport } from './routes/pillars.valuation'
 import { Route as PillarsMonthlyOverviewRouteImport } from './routes/pillars.monthly-overview'
 import { Route as PillarsMarginPerMarketRouteImport } from './routes/pillars.margin-per-market'
 import { Route as PillarsForecastRouteImport } from './routes/pillars.forecast'
@@ -78,6 +79,11 @@ const AccountingRoute = AccountingRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PillarsValuationRoute = PillarsValuationRouteImport.update({
+  id: '/pillars/valuation',
+  path: '/pillars/valuation',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PillarsMonthlyOverviewRoute = PillarsMonthlyOverviewRouteImport.update({
@@ -213,6 +219,7 @@ export interface FileRoutesByFullPath {
   '/pillars/forecast': typeof PillarsForecastRoute
   '/pillars/margin-per-market': typeof PillarsMarginPerMarketRoute
   '/pillars/monthly-overview': typeof PillarsMonthlyOverviewRoute
+  '/pillars/valuation': typeof PillarsValuationRoute
   '/api/auth/jortt': typeof ApiAuthJorttRoute
   '/api/auth/xero': typeof ApiAuthXeroRouteWithChildren
   '/api/jortt/callback': typeof ApiJorttCallbackRoute
@@ -245,6 +252,7 @@ export interface FileRoutesByTo {
   '/pillars/forecast': typeof PillarsForecastRoute
   '/pillars/margin-per-market': typeof PillarsMarginPerMarketRoute
   '/pillars/monthly-overview': typeof PillarsMonthlyOverviewRoute
+  '/pillars/valuation': typeof PillarsValuationRoute
   '/api/auth/jortt': typeof ApiAuthJorttRoute
   '/api/auth/xero': typeof ApiAuthXeroRouteWithChildren
   '/api/jortt/callback': typeof ApiJorttCallbackRoute
@@ -278,6 +286,7 @@ export interface FileRoutesById {
   '/pillars/forecast': typeof PillarsForecastRoute
   '/pillars/margin-per-market': typeof PillarsMarginPerMarketRoute
   '/pillars/monthly-overview': typeof PillarsMonthlyOverviewRoute
+  '/pillars/valuation': typeof PillarsValuationRoute
   '/api/auth/jortt': typeof ApiAuthJorttRoute
   '/api/auth/xero': typeof ApiAuthXeroRouteWithChildren
   '/api/jortt/callback': typeof ApiJorttCallbackRoute
@@ -312,6 +321,7 @@ export interface FileRouteTypes {
     | '/pillars/forecast'
     | '/pillars/margin-per-market'
     | '/pillars/monthly-overview'
+    | '/pillars/valuation'
     | '/api/auth/jortt'
     | '/api/auth/xero'
     | '/api/jortt/callback'
@@ -344,6 +354,7 @@ export interface FileRouteTypes {
     | '/pillars/forecast'
     | '/pillars/margin-per-market'
     | '/pillars/monthly-overview'
+    | '/pillars/valuation'
     | '/api/auth/jortt'
     | '/api/auth/xero'
     | '/api/jortt/callback'
@@ -376,6 +387,7 @@ export interface FileRouteTypes {
     | '/pillars/forecast'
     | '/pillars/margin-per-market'
     | '/pillars/monthly-overview'
+    | '/pillars/valuation'
     | '/api/auth/jortt'
     | '/api/auth/xero'
     | '/api/jortt/callback'
@@ -409,6 +421,7 @@ export interface RootRouteChildren {
   PillarsForecastRoute: typeof PillarsForecastRoute
   PillarsMarginPerMarketRoute: typeof PillarsMarginPerMarketRoute
   PillarsMonthlyOverviewRoute: typeof PillarsMonthlyOverviewRoute
+  PillarsValuationRoute: typeof PillarsValuationRoute
   ApiAuthJorttRoute: typeof ApiAuthJorttRoute
   ApiAuthXeroRoute: typeof ApiAuthXeroRouteWithChildren
   ApiPublicDebugRefundsRoute: typeof ApiPublicDebugRefundsRoute
@@ -474,6 +487,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pillars/valuation': {
+      id: '/pillars/valuation'
+      path: '/pillars/valuation'
+      fullPath: '/pillars/valuation'
+      preLoaderRoute: typeof PillarsValuationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pillars/monthly-overview': {
@@ -680,6 +700,7 @@ const rootRouteChildren: RootRouteChildren = {
   PillarsForecastRoute: PillarsForecastRoute,
   PillarsMarginPerMarketRoute: PillarsMarginPerMarketRoute,
   PillarsMonthlyOverviewRoute: PillarsMonthlyOverviewRoute,
+  PillarsValuationRoute: PillarsValuationRoute,
   ApiAuthJorttRoute: ApiAuthJorttRoute,
   ApiAuthXeroRoute: ApiAuthXeroRouteWithChildren,
   ApiPublicDebugRefundsRoute: ApiPublicDebugRefundsRoute,
