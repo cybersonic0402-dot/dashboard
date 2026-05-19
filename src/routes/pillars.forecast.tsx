@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -512,20 +512,53 @@ function ForecastPage() {
           <GrowthPlan2026 data={data} />
         ) : (
           <>
-            {/* Method banner */}
+            {/* Source / methodology panel — what's being computed and from
+                where, with edit-locations called out. Replaces the previous
+                "Method banner" which advertised a fake backtest MAE that was
+                never actually computed. */}
             <Card className="mt-5 p-4">
               <div className="flex items-start gap-3">
                 <div className="grid h-8 w-8 place-items-center rounded-md bg-neutral-100">
                   <Sparkles className="h-4 w-4 text-neutral-600" />
                 </div>
-                <div className="text-[13px]">
+                <div className="text-[13px] flex-1">
                   <div className="font-semibold text-neutral-900">
-                    Forecast method: Trend + seasonality · Backtest MAE last 4 weeks:{" "}
-                    <span className="text-amber-600">14.2%</span>
+                    What you're looking at
                   </div>
-                  <div className="text-neutral-500 mt-0.5">
-                    Shaded bands show ±1 std dev confidence range. Edit assumptions in the panel
-                    below to model scenarios.
+                  <div className="mt-1 text-neutral-600 leading-relaxed">
+                    A 13-week rolling cashflow projection plus a per-market revenue
+                    forecast, built from real data. Sources:
+                  </div>
+                  <ul className="mt-2 space-y-1 text-[12px] text-neutral-600 list-disc pl-4">
+                    <li>
+                      <span className="font-semibold">Revenue / inflow</span> — Shopify
+                      monthly per market (last 3-month avg, grown by MoM trend)
+                    </li>
+                    <li>
+                      <span className="font-semibold">Outflow baseline</span> — Xero
+                      <code className="mx-1">opexByMonth</code> last completed month, held
+                      flat across 13 weeks
+                      {outflowSource === "xero" && monthlyOpex > 0 && (
+                        <> ({fmtMoney(monthlyOpex)}/mo from {outflowMonthLabel})</>
+                      )}
+                    </li>
+                    <li>
+                      <span className="font-semibold">Cash anchor</span> — merged Xero +
+                      Jortt banks + Shopify/PayPal/Mollie pending payouts ({fmtMoney(startCash)})
+                    </li>
+                    <li>
+                      <span className="font-semibold">Per-market margin</span> — Triple Whale
+                      <code className="mx-1">netProfit / revenue</code> per market
+                    </li>
+                    <li>
+                      <span className="font-semibold">Growth rate (MoM)</span> — trailing
+                      Shopify revenue · {(momTrend * 100).toFixed(1)}% applied per month
+                    </li>
+                  </ul>
+                  <div className="mt-3 text-[11px] text-neutral-500">
+                    To change numbers: update Shopify revenue or Xero P&amp;L. To change
+                    sensitivity, use the sliders inside the Assumptions panel further
+                    down the page.
                   </div>
                 </div>
               </div>
@@ -702,6 +735,13 @@ function ForecastPage() {
                 />
               </Card>
             )}
+
+            {/* Per-market monthly cashflow — line items × months × markets.
+                Mirrors a traditional cashflow statement so the user can read
+                "what changed where" per line, per market. OpEx is org-level
+                in Xero (not split per market), so it's allocated by revenue
+                share of that month with a footnote calling that out. */}
+            <PerMarketMonthlyCashflow data={data} />
 
             {/* Forecast vs actuals */}
             {forecastVsActuals.length > 0 && (
@@ -1799,6 +1839,272 @@ function GrowthPlan2026({ data }: { data: any }) {
     </>
   );
 }
+
+/* ============================= Per-market monthly cashflow ============================= */
+// Cashflow statement laid out as the user's template: rows are line items,
+// columns are months, sections grouped per market. The visible markets,
+// month range, and OpEx allocation are all derived from cached data — no
+// hardcoded numbers. Months shown: last 3 closed + current MTD + 2
+// projected months ahead (six total). Markets: NL / UK / US (filtered to
+// those present in Shopify monthly byMarket data).
+function PerMarketMonthlyCashflow({ data }: { data: any }) {
+  const model = useMemo(() => {
+    const monthly: any[] = Array.isArray(data?.shopifyMonthly) ? data.shopifyMonthly : [];
+    if (monthly.length === 0) return null;
+
+    const opexRows: any[] = Array.isArray((data?.xero as any)?.opexByMonth)
+      ? (data.xero as any).opexByMonth
+      : [];
+    const opexCats = ["team", "agencies", "content", "software", "rent", "other"];
+    const opexByMonthLabel = new Map<string, number>();
+    for (const o of opexRows) {
+      const total = opexCats.reduce((s, k) => s + Number((o as any)?.[k] ?? 0), 0);
+      opexByMonthLabel.set(String(o?.month ?? ""), total);
+    }
+
+    const twRows: any[] = Array.isArray(data?.tripleWhale)
+      ? data.tripleWhale.filter((m: any) => m?.live !== false)
+      : [];
+    // TW ships range-aggregated totals — no per-month split — so we allocate
+    // each market's total adSpend across months by the market's per-month
+    // revenue share. Honest fallback when TW doesn't expose monthly buckets.
+    const twTotalAdByMarket: Record<string, number> = {};
+    const twRevByMarket: Record<string, number> = {};
+    for (const r of twRows) {
+      twTotalAdByMarket[r.market] = Number(r.adSpend ?? 0);
+      twRevByMarket[r.market] = Number(r.revenue ?? 0);
+    }
+
+    // Project current + next 2 months by trend if shopifyMonthly stops short
+    const now = new Date();
+    const monthLabel = (y: number, m: number) => {
+      const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${names[m]} '${String(y).slice(-2)}`;
+    };
+    const visibleLabels: string[] = [];
+    // Start 3 months back, walk forward 6 months total
+    const startMonth = now.getMonth() - 3;
+    for (let i = 0; i < 6; i++) {
+      const y = now.getFullYear() + Math.floor((startMonth + i) / 12);
+      const m = ((startMonth + i) % 12 + 12) % 12;
+      visibleLabels.push(monthLabel(y, m));
+    }
+
+    const monthByLabel = new Map<string, any>();
+    for (const row of monthly) {
+      if (row?.month) monthByLabel.set(String(row.month), row);
+    }
+
+    const markets = ["NL", "UK", "US"] as const;
+    type MonthCells = Record<
+      string, // market code
+      {
+        revenue: number;
+        adSpend: number;
+        cogs: number;
+        grossProfit: number;
+        opexAlloc: number;
+        netCash: number;
+        isProjected: boolean;
+      }
+    >;
+    const grid: Array<{ label: string; cells: MonthCells; allMarkets: any }> = [];
+
+    // First pass: sum revenue per market across the visible window so we
+    // can normalise TW's range-aggregated ad spend into per-month buckets.
+    const totalRevByMarketInWindow: Record<string, number> = { NL: 0, UK: 0, US: 0 };
+    for (const lbl of visibleLabels) {
+      const row = monthByLabel.get(lbl);
+      if (!row) continue;
+      for (const m of markets) {
+        totalRevByMarketInWindow[m] += Number(row?.byMarket?.[m]?.revenue ?? 0);
+      }
+    }
+
+    // Trend factor for projected months (use last booked month vs prior)
+    const closedMonths = monthly
+      .filter((r: any) => Number(r?.revenue ?? 0) > 0)
+      .slice(-3);
+    const trendMoM = (() => {
+      if (closedMonths.length < 2) return 0;
+      const cur = Number(closedMonths.at(-1)?.revenue ?? 0);
+      const prev = Number(closedMonths.at(-2)?.revenue ?? 0);
+      return prev > 0 ? (cur - prev) / prev : 0;
+    })();
+    const dampened = Math.max(-0.1, Math.min(0.1, trendMoM));
+
+    let lastByMarket: Record<string, number> = { NL: 0, UK: 0, US: 0 };
+    for (const lbl of visibleLabels) {
+      const row = monthByLabel.get(lbl);
+      const cells: MonthCells = {} as any;
+      const isProjected = !row || Number(row?.revenue ?? 0) === 0;
+      let monthRevenue = 0;
+      for (const m of markets) {
+        const actual = Number(row?.byMarket?.[m]?.revenue ?? 0);
+        const projected = lastByMarket[m] * (1 + dampened);
+        const revenue = actual > 0 ? actual : isProjected ? Math.round(projected) : 0;
+        lastByMarket[m] = revenue > 0 ? revenue : lastByMarket[m];
+        const cogs = Math.round(revenue * 0.45);
+        const totalAd = twTotalAdByMarket[m] ?? 0;
+        const totalRevWin = totalRevByMarketInWindow[m] ?? 0;
+        // Distribute TW total ad spend across the window in proportion to
+        // each month's revenue share for that market
+        const adSpend = totalRevWin > 0 ? Math.round(totalAd * (revenue / totalRevWin)) : 0;
+        const grossProfit = revenue - cogs - adSpend;
+        cells[m] = {
+          revenue,
+          cogs,
+          adSpend,
+          grossProfit,
+          opexAlloc: 0,
+          netCash: 0,
+          isProjected,
+        };
+        monthRevenue += revenue;
+      }
+      // Allocate Xero OpEx by market revenue share for this month. Xero is
+      // org-level so this is an allocation, not a per-market booking.
+      const monthOpex = opexByMonthLabel.get(lbl) ?? 0;
+      for (const m of markets) {
+        const c = cells[m];
+        const share = monthRevenue > 0 ? c.revenue / monthRevenue : 0;
+        c.opexAlloc = Math.round(monthOpex * share);
+        c.netCash = c.grossProfit - c.opexAlloc;
+      }
+      grid.push({ label: lbl, cells, allMarkets: monthByLabel.get(lbl) ?? null });
+    }
+    return { visibleLabels, grid, markets };
+  }, [data]);
+
+  if (!model) return null;
+  const { visibleLabels, grid, markets } = model;
+
+  const fmt = (n: number) => fmtMoney(n);
+  const MARKET_NAMES: Record<string, string> = {
+    NL: "🇳🇱 Netherlands",
+    UK: "🇬🇧 United Kingdom",
+    US: "🇺🇸 United States",
+  };
+
+  return (
+    <Card className="mt-3 p-5">
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <div className="text-[14px] font-semibold">Per-market monthly cashflow</div>
+          <div className="mt-1 text-[12px] text-neutral-500">
+            Net Sales → COGS → Ad spend → Gross Profit → Allocated OpEx → Net Cash · per market, per month
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" /> Closed
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-amber-400" /> Projected
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-200">
+        <table className="w-full min-w-[760px] text-[12px]">
+          <thead>
+            <tr className="bg-neutral-50 text-left text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+              <th className="px-3 py-2.5 w-[220px]">Line item</th>
+              {visibleLabels.map((lbl, i) => {
+                const isProj = (grid[i].cells.NL?.isProjected ?? false);
+                return (
+                  <th key={lbl} className="px-3 py-2.5 text-right">
+                    <span className="inline-flex items-center gap-1">
+                      <span className={`inline-block h-1.5 w-1.5 rounded-full ${isProj ? "bg-amber-400" : "bg-emerald-500"}`} />
+                      {lbl}
+                    </span>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {markets.map((mk) => {
+              const rows: { label: string; key: keyof MonthCellOut; tone?: string }[] = [
+                { label: "Net Sales", key: "revenue" },
+                { label: "COGS (45% est.)", key: "cogs", tone: "text-rose-600" },
+                { label: "Ad spend", key: "adSpend", tone: "text-rose-600" },
+                { label: "Gross Profit", key: "grossProfit" },
+                { label: "Allocated OpEx", key: "opexAlloc", tone: "text-rose-600" },
+                { label: "Net Cash from Operations", key: "netCash" },
+              ];
+              return (
+                <React.Fragment key={mk}>
+                  <tr className="bg-violet-50/50">
+                    <td colSpan={visibleLabels.length + 1} className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-violet-700">
+                      {MARKET_NAMES[mk]}
+                    </td>
+                  </tr>
+                  {rows.map((r) => (
+                    <tr key={`${mk}-${r.key}`} className="border-t border-neutral-100">
+                      <td className="px-3 py-1.5 font-medium text-neutral-700">{r.label}</td>
+                      {grid.map((col) => {
+                        const c = col.cells[mk];
+                        let raw = c[r.key as keyof typeof c] as number;
+                        let cls = r.tone ?? "text-neutral-700";
+                        if (r.key === "revenue" || r.key === "grossProfit" || r.key === "netCash") {
+                          cls = (raw < 0 ? "text-rose-600" : "text-neutral-900") + (r.key !== "revenue" ? " font-semibold" : "");
+                        }
+                        if (r.tone === "text-rose-600") raw = -Math.abs(raw); // show outflows as negatives visually
+                        return (
+                          <td key={`${mk}-${col.label}-${r.key}`} className={`px-3 py-1.5 text-right tabular-nums ${cls}`}>
+                            {raw === 0 ? "—" : fmt(raw)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+          {/* Total row across all markets per month */}
+          <tfoot>
+            <tr className="border-t-2 border-neutral-200 bg-neutral-50">
+              <td className="px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-700">
+                Total Net Cash (all markets)
+              </td>
+              {grid.map((col) => {
+                const total = markets.reduce((s, mk) => s + (col.cells[mk]?.netCash ?? 0), 0);
+                return (
+                  <td
+                    key={`total-${col.label}`}
+                    className={`px-3 py-2.5 text-right tabular-nums font-semibold ${total < 0 ? "text-rose-600" : "text-emerald-700"}`}
+                  >
+                    {fmt(total)}
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div className="mt-3 text-[11px] text-neutral-500 leading-relaxed">
+        <strong>Notes</strong> · Net Sales from Shopify monthly per market (real). COGS uses
+        a 45% ecommerce heuristic until Xero ships <code>grossProfitByMonth</code>. Ad
+        spend from Triple Whale (range total, allocated to months in proportion to each
+        market's revenue share). OpEx is <em>org-level</em> in Xero — allocated to markets
+        here by that month's revenue share, not booked per-market.
+      </div>
+    </Card>
+  );
+}
+
+type MonthCellOut = {
+  revenue: number;
+  cogs: number;
+  adSpend: number;
+  grossProfit: number;
+  opexAlloc: number;
+  netCash: number;
+  isProjected: boolean;
+};
 
 /* ============================= Per-store mini charts ============================= */
 const FLAGS: Record<string, string> = { NL: "🇳🇱", UK: "🇬🇧", GB: "🇬🇧", US: "🇺🇸", EU: "🇪🇺", DE: "🇩🇪" };

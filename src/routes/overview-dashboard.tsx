@@ -168,6 +168,10 @@ function OverviewPage() {
               return data?.shopifyRepeatFunnel?.calcVersion >= 6 ? data.shopifyRepeatFunnel : null;
             })()}
             sourceStatus={data?.sourceStatus ?? null}
+            shopifyPayouts={data?.shopifyPayouts ?? null}
+            paypalBalances={data?.paypalBalances ?? null}
+            mollieBalances={data?.mollieBalances ?? null}
+            picqerInventory={data?.manual?.inventoryPositions ?? []}
           />
           <div className="mt-10 text-center text-[11px] text-neutral-400">
             {data?.syncedAt ? `Synced · ${new Date(data.syncedAt).toLocaleString()}` : "No live sources connected"}

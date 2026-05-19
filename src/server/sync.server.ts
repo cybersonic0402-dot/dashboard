@@ -299,7 +299,7 @@ export function refreshStaleInBackground(cache: CacheMap): void {
         job.key === "monthly" &&
         !payload?.__error &&
         Array.isArray(payload) &&
-        payload.some((row: any) => row?.calcVersion !== 2)) ||
+        payload.some((row: any) => row?.calcVersion !== 3)) ||
       (job.provider === "shopify" &&
         job.key === "daily" &&
         payload &&

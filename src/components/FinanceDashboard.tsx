@@ -721,7 +721,7 @@ function filterMonthlyCohorts<T extends { month?: string }>(
   });
 }
 
-export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twData = [], subData: subDataProp = [], shopifyMonthly = null, jorttData = null, xeroData = null, xeroError = null, xeroRaw = null, rangeData = null, rangeSyncing = false, shopifyDaily = null, tripleWhaleDaily = null, tripleWhaleCustomerEconomics = null, shopifyRepeatFunnel = null, sourceStatus = null, manualData = null }: any) => {
+export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twData = [], subData: subDataProp = [], shopifyMonthly = null, jorttData = null, xeroData = null, xeroError = null, xeroRaw = null, rangeData = null, rangeSyncing = false, shopifyDaily = null, tripleWhaleDaily = null, tripleWhaleCustomerEconomics = null, shopifyRepeatFunnel = null, sourceStatus = null, manualData = null, shopifyPayouts = null, paypalBalances = null, mollieBalances = null, picqerInventory = [] }: any) => {
   const [chartsReady, setChartsReady] = useState(false);
   const [showRevenueBreakdown, setShowRevenueBreakdown] = useState(false);
   const [showRevProfitChart, setShowRevProfitChart] = useState(false);
@@ -1354,10 +1354,191 @@ export const OverviewView = ({ dateRange, onDateChange, liveMarkets = null, twDa
       );
     })()}
 
-    {/* Cash & Inventory positions are now sourced from Xero + banking
-        platforms + Picqer respectively (see the Balance Sheet pillar). The
-        previous "manual data" section that backed them was removed when
-        /admin/manual-data was retired. */}
+    {/* Cash & Inventory summary — Xero banks + platform payouts + Picqer */}
+    {(() => {
+      // ── Cash positions ──
+      const xeroBanks: any[] = Array.isArray((xeroData as any)?.bankAccounts)
+        ? (xeroData as any).bankAccounts
+        : [];
+      const isPlatform = (n: string) =>
+        /(mollie|shopify|paypal|stripe|adyen|klarna|amazon|revolut pay)/i.test(n);
+      const bankRows = xeroBanks
+        .filter((b: any) => !isPlatform(String(b?.name ?? "")))
+        .map((b: any) => ({
+          name: String(b?.name ?? "Bank"),
+          balance: Number(b?.balance ?? 0),
+          currency: String(b?.currency ?? "EUR"),
+        }));
+      const platformRows: { name: string; balance: number; currency: string }[] = [];
+      const seen = new Set<string>();
+      const pushPlat = (row: { name: string; balance: number; currency: string }) => {
+        const k = row.name.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        platformRows.push(row);
+      };
+      for (const b of xeroBanks) {
+        const name = String(b?.name ?? "");
+        if (isPlatform(name)) {
+          pushPlat({ name, balance: Number(b?.balance ?? 0), currency: String(b?.currency ?? "EUR") });
+        }
+      }
+      const spMarkets = Array.isArray((shopifyPayouts as any)?.markets)
+        ? (shopifyPayouts as any).markets
+        : [];
+      for (const m of spMarkets) {
+        const pending = Number(m?.pendingBalance ?? 0) + Number(m?.scheduledPayouts ?? 0);
+        pushPlat({
+          name: m?.name ?? `Shopify Payments ${m?.market ?? ""}`.trim(),
+          balance: pending,
+          currency: String(m?.currency ?? "EUR"),
+        });
+      }
+      for (const a of Array.isArray((paypalBalances as any)?.accounts) ? (paypalBalances as any).accounts : []) {
+        pushPlat({ name: String(a?.name ?? "PayPal"), balance: Number(a?.balance ?? 0), currency: String(a?.currency ?? "EUR") });
+      }
+      for (const a of Array.isArray((mollieBalances as any)?.accounts) ? (mollieBalances as any).accounts : []) {
+        pushPlat({ name: String(a?.name ?? "Mollie"), balance: Number(a?.balance ?? 0), currency: String(a?.currency ?? "EUR") });
+      }
+      const totalBank = bankRows.reduce((s, b) => s + b.balance, 0);
+      const totalPlatforms = platformRows.reduce((s, b) => s + b.balance, 0);
+      const ar = Number((xeroData as any)?.accountsReceivable ?? 0);
+      const ap = Number((xeroData as any)?.accountsPayable ?? (xeroData as any)?.apSupplier ?? 0);
+      const netLiquidity = totalBank + totalPlatforms + ar - Math.abs(ap);
+
+      // ── Inventory positions (Picqer rows, grouped by FFC/location) ──
+      const inv: any[] = Array.isArray(picqerInventory) ? picqerInventory : [];
+      const invByLoc: Record<string, { pieces: number; value: number }> = {};
+      let invTotalPieces = 0;
+      let invTotalValue = 0;
+      for (const r of inv) {
+        const loc = String(r?.location ?? "Unassigned");
+        const pieces = Number(r?.pieces ?? 0);
+        const value = pieces * Number(r?.unit_cost_eur ?? 0);
+        invTotalPieces += pieces;
+        invTotalValue += value;
+        if (!invByLoc[loc]) invByLoc[loc] = { pieces: 0, value: 0 };
+        invByLoc[loc].pieces += pieces;
+        invByLoc[loc].value += value;
+      }
+      const invLocs = Object.entries(invByLoc).sort((a, b) => b[1].value - a[1].value);
+
+      const fmtBal = (n: number, c = "EUR") =>
+        new Intl.NumberFormat("en-GB", { style: "currency", currency: c, maximumFractionDigits: 0 }).format(n);
+
+      const hasAnyCash = bankRows.length + platformRows.length > 0;
+      const hasAnyInv = inv.length > 0;
+      if (!hasAnyCash && !hasAnyInv) return null;
+
+      return (
+        <section className="mt-3 grid gap-3 lg:grid-cols-2">
+          {/* Cash positions card */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-[13px] font-semibold">Cash positions</div>
+                <div className="mt-0.5 text-[11px] text-neutral-400">
+                  Banks + platform payouts pending · AR / AP from Xero
+                </div>
+              </div>
+              <span className="inline-flex items-center gap-1 rounded-md bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">
+                Xero
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-3 md:grid-cols-4">
+              <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-neutral-400">Banks</div>
+                <div className="mt-0.5 text-[15px] font-semibold tabular-nums">{fmtBal(totalBank)}</div>
+              </div>
+              <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-neutral-400">Pending payouts</div>
+                <div className="mt-0.5 text-[15px] font-semibold tabular-nums">{fmtBal(totalPlatforms)}</div>
+              </div>
+              <div className="rounded-md border border-emerald-100 bg-emerald-50/40 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-emerald-600">Receivable</div>
+                <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-emerald-700">{fmtBal(ar)}</div>
+              </div>
+              <div className="rounded-md border border-rose-100 bg-rose-50/40 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wider text-rose-600">Payable</div>
+                <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-rose-700">{fmtBal(Math.abs(ap))}</div>
+              </div>
+            </div>
+            <div className="rounded-md border border-neutral-200 bg-white">
+              <table className="w-full text-[12px]">
+                <thead>
+                  <tr className="border-b border-neutral-100 text-left text-[10px] font-medium uppercase tracking-wider text-neutral-400">
+                    <th className="pl-3 py-2">Account</th>
+                    <th className="py-2 pr-3 text-right">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...bankRows, ...platformRows].map((b, i) => (
+                    <tr key={`${b.name}-${i}`} className="border-b border-neutral-50 last:border-0">
+                      <td className="pl-3 py-1.5 font-medium">{b.name}</td>
+                      <td className="py-1.5 pr-3 text-right tabular-nums">{fmtBal(b.balance, b.currency)}</td>
+                    </tr>
+                  ))}
+                  <tr className="font-semibold">
+                    <td className="pl-3 py-2 pt-3">Net liquidity</td>
+                    <td className={`py-2 pr-3 pt-3 text-right tabular-nums ${netLiquidity < 0 ? "text-rose-600" : ""}`}>
+                      {fmtBal(netLiquidity)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-2 text-[10px] text-neutral-400">
+              Net liquidity = banks + platform pending + receivables − payables
+            </div>
+          </Card>
+
+          {/* Inventory by FFC card */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-[13px] font-semibold">Inventory positions</div>
+                <div className="mt-0.5 text-[11px] text-neutral-400">
+                  Live stock per FFC location · {invTotalPieces.toLocaleString()} pcs
+                </div>
+              </div>
+              <span className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                Picqer
+              </span>
+            </div>
+            <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2 mb-3">
+              <div className="text-[10px] uppercase tracking-wider text-neutral-400">Total inventory value</div>
+              <div className="mt-0.5 text-[20px] font-semibold tabular-nums">{fmtBal(invTotalValue)}</div>
+            </div>
+            {invLocs.length > 0 ? (
+              <div className="rounded-md border border-neutral-200 bg-white">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="border-b border-neutral-100 text-left text-[10px] font-medium uppercase tracking-wider text-neutral-400">
+                      <th className="pl-3 py-2">FFC / Location</th>
+                      <th className="py-2 pr-3 text-right">Pieces</th>
+                      <th className="py-2 pr-3 text-right">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invLocs.map(([loc, v]) => (
+                      <tr key={loc} className="border-b border-neutral-50 last:border-0">
+                        <td className="pl-3 py-1.5 font-medium">{loc}</td>
+                        <td className="py-1.5 pr-3 text-right tabular-nums">{v.pieces.toLocaleString()}</td>
+                        <td className="py-1.5 pr-3 text-right tabular-nums">{fmtBal(v.value)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed border-neutral-200 bg-neutral-50 px-3 py-6 text-center text-[12px] text-neutral-400">
+                No Picqer inventory rows synced yet.
+              </div>
+            )}
+          </Card>
+        </section>
+      );
+    })()}
 
     {/* Syncing overlay */}
     {rangeSyncing && (
@@ -2703,7 +2884,7 @@ export const MarketsView = ({ liveMarkets = null, twData = [], dateRange = null,
                 <th className="px-3 py-2.5 font-medium text-right">CAC</th>
                 <th className="px-3 py-2.5 font-medium text-right">Gross M%</th>
                 <th className="px-3 py-2.5 font-medium text-right">Shipping</th>
-                <th className="px-3 py-2.5 font-medium text-right">Fees</th>
+                <th className="px-3 py-2.5 font-medium text-right">Payment fees</th>
                 <th className="px-3 py-2.5 font-medium text-right cursor-pointer hover:text-neutral-900" onClick={() => setSortBy("contributionMargin")}>Contrib M%</th>
                 <th className="px-3 py-2.5 font-medium text-right">Contrib (€)</th>
                 <th className="px-3 py-2.5 font-medium text-right">Refund %</th>

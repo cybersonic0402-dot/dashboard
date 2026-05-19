@@ -374,10 +374,28 @@ export async function fetchShopifyMonthly() {
   const clientId = process.env.SHOPIFY_APP_CLIENT_ID;
   if (!clientId) return null;
 
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-  const since = `${sixMonthsAgo.toISOString().split("T")[0]}T00:00:00Z`;
-  const sinceDay = since.slice(0, 10);
+  // Walk the last 6 calendar months one window at a time. The previous
+  // implementation fetched the whole 6-month span in a single 240-page
+  // pull (60k orders max per store), then bucketed by createdAt. With UK
+  // alone doing ~25k orders/month, the page cap was hit halfway through
+  // March and the older months (Jan / Feb) silently dropped off the
+  // dashboard. Per-month windows put a hard floor under each month —
+  // each window is capped independently at 240 pages (still 60k orders
+  // per month, far more than any single market produces) and runs in
+  // parallel per store.
+  const months: { label: string; since: string; until: string; sinceDay: string }[] = [];
+  const now = new Date();
+  for (let back = 5; back >= 0; back--) {
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1));
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back + 1, 1));
+    const since = `${start.toISOString().split("T")[0]}T00:00:00Z`;
+    const until = `${end.toISOString().split("T")[0]}T00:00:00Z`;
+    const label = start
+      .toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" })
+      .replace(" ", " '");
+    months.push({ label, since, until, sinceDay: since.slice(0, 10) });
+  }
+  const sinceDay = months[0].sinceDay;
 
   try {
     const perStore = await Promise.all(
@@ -390,8 +408,30 @@ export async function fetchShopifyMonthly() {
           };
         const token = await getShopifyToken(store);
         if (!token) return { code, monthlySums: {} };
-        const { monthlySums, truncated } = await fetchShopifyAllOrders(store, token, since, 240);
-        if (truncated) console.warn(`Shopify monthly ${code}: capped at 240 pages (60,000 orders)`);
+        // One window per month. Sequential per store (parallel across
+        // stores via the outer Promise.all) so we don't blow the Shopify
+        // GraphQL cost budget on a single tenant.
+        const monthlySums: Record<string, { revenue: number; orders: number; refunds: number }> = {};
+        for (const win of months) {
+          const { monthlySums: windowSums, truncated } = await fetchShopifyAllOrders(
+            store,
+            token,
+            win.since,
+            240,
+            win.until,
+          );
+          if (truncated) {
+            console.warn(
+              `Shopify monthly ${code} ${win.label}: capped at 240 pages — month is incomplete`,
+            );
+          }
+          for (const [mk, agg] of Object.entries(windowSums)) {
+            if (!monthlySums[mk]) monthlySums[mk] = { revenue: 0, orders: 0, refunds: 0 };
+            monthlySums[mk].revenue += agg.revenue;
+            monthlySums[mk].refunds += agg.refunds;
+            monthlySums[mk].orders += agg.orders;
+          }
+        }
         return { code, monthlySums };
       }),
     );
@@ -436,7 +476,7 @@ export async function fetchShopifyMonthly() {
           new Date("1 " + a.replace("'", "20")).getTime() -
           new Date("1 " + b.replace("'", "20")).getTime(),
       )
-      .map(([month, data]) => ({ month, ...data, calcVersion: 2 }));
+      .map(([month, data]) => ({ month, ...data, calcVersion: 3 }));
   } catch {
     return null;
   }
