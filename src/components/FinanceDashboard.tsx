@@ -3439,6 +3439,19 @@ export const MonthlyView = ({ opexByMonth: liveOpexByMonth, opexDetail: liveOpex
   };
   const activeOpexByMonth = liveOpexByMonth ?? null;
   const activeOpexDetail = liveOpexDetail ?? null;
+  // Full YTD calendar (Jan through current month) for the Month close
+  // status card. Independent from `activeMonths` because that one drops
+  // leading zero-revenue months to keep charts clean — the close status
+  // wants every YTD month visible regardless of bookings.
+  const ytdCloseMonths = (() => {
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return Array.from({ length: now.getMonth() + 1 }, (_, i) => ({
+      month: `${monthNames[i]} '${yy}`,
+      isOpen: i === now.getMonth(),
+    }));
+  })();
 
   return (
     <>
@@ -3674,24 +3687,30 @@ export const MonthlyView = ({ opexByMonth: liveOpexByMonth, opexDetail: liveOpex
       {/* OpEx breakdown — 5 categories, sourced from Xero P&L */}
       <OpExBreakdownSection opexByMonth={activeOpexByMonth} opexDetail={activeOpexDetail} opexDetailByMonth={liveOpexDetailByMonth} xeroDiag={xeroDiag} />
 
-      {/* Month close status */}
+      {/* Month close status — full year-to-date, Jan through the current
+          (in-progress) month. Months with no Shopify revenue still appear
+          here because "closed" is an accounting state, not a sales state. */}
       <Card className="mt-3 p-5">
         <div className="text-[13px] font-semibold">Month close status</div>
         <div className="mt-3 flex items-center gap-3 overflow-x-auto">
-          {activeMonths.map((m, i) => {
-            const isOpen = i === activeMonths.length - 1;
-            return (
-              <div key={m.month} className={`shrink-0 rounded-lg border px-4 py-3 ${isOpen ? "border-amber-200 bg-amber-50/40" : "border-emerald-200 bg-emerald-50/30"}`}>
-                <div className="text-[11px] font-medium text-neutral-500">{m.month}</div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  {isOpen ? <Clock size={12} className="text-amber-600" /> : <CircleCheck size={12} className="text-emerald-600" />}
-                  <span className={`text-[11px] font-medium ${isOpen ? "text-amber-700" : "text-emerald-700"}`}>
-                    {isOpen ? "Open" : "Closed"}
-                  </span>
-                </div>
+          {ytdCloseMonths.map((m) => (
+            <div
+              key={m.month}
+              className={`shrink-0 rounded-lg border px-4 py-3 ${
+                m.isOpen ? "border-amber-200 bg-amber-50/40" : "border-emerald-200 bg-emerald-50/30"
+              }`}
+            >
+              <div className="text-[11px] font-medium text-neutral-500">{m.month}</div>
+              <div className="mt-1 flex items-center gap-1.5">
+                {m.isOpen ? <Clock size={12} className="text-amber-600" /> : <CircleCheck size={12} className="text-emerald-600" />}
+                <span
+                  className={`text-[11px] font-medium ${m.isOpen ? "text-amber-700" : "text-emerald-700"}`}
+                >
+                  {m.isOpen ? "Open" : "Closed"}
+                </span>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </Card>
     </>
