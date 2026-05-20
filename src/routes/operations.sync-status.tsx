@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Plug, AlertCircle, ChevronRight, LayoutGrid } from "lucide-react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getSyncStatus, getDashboardData, triggerSyncNow, triggerXeroSyncNow, triggerPicqerSyncNow, getLoopStoreStatus, getLoopApiPendingCount, triggerLoopFullSync, runLoopSyncChunk } from "@/server/dashboard.functions";
+import { getSyncStatus, getDashboardData, triggerSyncNow, triggerXeroSyncNow, triggerPicqerSyncNow, getLoopStoreStatus, getLoopApiPendingCount, triggerLoopFullSync, runLoopSyncChunk, triggerShopifyFullSync, getShopifySyncStatus, runShopifySyncChunk } from "@/server/dashboard.functions";
 
 export const Route = createFileRoute("/operations/sync-status")({
   head: () => ({ meta: [{ title: "Sync status — Zapply" }] }),
@@ -212,6 +212,185 @@ function freshestAge(rows: SourceRow[]): number | null {
   return ages.length === 0 ? null : Math.min(...ages);
 }
 
+// Shopify orders mirror — backfill / incremental status + manual trigger.
+// Mirrors the Loop microservice panel below but talks to our in-process
+// shopify-sync.server.ts. Polls status every 10s while a backfill is
+// running so the user can see the cursor advance and the row counts
+// climb in real time.
+function ShopifyBackfillPanel() {
+  const [status, setStatus] = useState<any>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const s = await getShopifySyncStatus();
+      setStatus(s);
+      setError(null);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load status");
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const stores = (["NL", "UK", "US"] as const).map((code) => {
+    const state = (status?.state ?? []).find((s: any) => s.store_code === code);
+    const stats = (status?.stats ?? []).find((s: any) => s.store === code);
+    const err = (status?.errors ?? []).find((e: any) => e.store_code === code && !e.resolved_at);
+    return { code, state, stats, err };
+  });
+
+  const totalRows = stores.reduce((s, x) => s + (x.stats?.rowCount ?? 0), 0);
+  const anyRunning = stores.some((x) => x.state?.last_run_status === "running");
+
+  async function runAll() {
+    setBusy("all");
+    setError(null);
+    try {
+      await triggerShopifyFullSync();
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? "Sync failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runOne(store: "NL" | "UK" | "US", reset = false) {
+    setBusy(`${store}${reset ? ":reset" : ""}`);
+    setError(null);
+    try {
+      await runShopifySyncChunk({ data: { store, reset } });
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? "Sync failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-[14px] font-semibold">Shopify orders → Postgres mirror</div>
+          <div className="mt-0.5 text-[12px] text-neutral-500">
+            Backfills every historical order into <code className="font-mono text-[11px]">shopify_orders</code> so
+            the dashboard reads from Supabase instead of hitting Shopify's 60-day-capped live API on every render.
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={runAll}
+            disabled={!!busy}
+            className="inline-flex items-center gap-2 rounded-md bg-neutral-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
+          >
+            {busy === "all" ? "Running…" : anyRunning ? "Resume sync" : "Run sync"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+        {stores.map(({ code, state, stats, err }) => {
+          const mode = state?.backfill_complete ? "Incremental" : "Backfill";
+          const lastRun = state?.last_run_status ?? "—";
+          const earliest = stats?.earliest ? new Date(stats.earliest).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+          const latest = stats?.latest ? new Date(stats.latest).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+          const flag = code === "NL" ? "🇳🇱" : code === "UK" ? "🇬🇧" : "🇺🇸";
+          return (
+            <div key={code} className="rounded-lg border border-neutral-100 p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-[14px]">{flag}</span>
+                  <div className="text-[13px] font-semibold">{code}</div>
+                </div>
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                    state?.backfill_complete
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  {mode}
+                </span>
+              </div>
+              <div className="mt-2 text-[18px] font-semibold tabular-nums">
+                {(stats?.rowCount ?? 0).toLocaleString()}
+                <span className="ml-1 text-[10px] font-normal text-neutral-400">orders</span>
+              </div>
+              <div className="mt-1 text-[11px] text-neutral-500">
+                Range · {earliest} → {latest}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1 text-[10px]">
+                <span
+                  className={`rounded-full px-1.5 py-0.5 font-medium ${
+                    lastRun === "success"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : lastRun === "running"
+                        ? "bg-sky-50 text-sky-700"
+                        : lastRun === "error"
+                          ? "bg-rose-50 text-rose-700"
+                          : "bg-neutral-100 text-neutral-600"
+                  }`}
+                >
+                  {lastRun}
+                </span>
+                {state?.last_run_message && lastRun !== "running" && (
+                  <span className="truncate text-neutral-400" title={state.last_run_message}>
+                    {state.last_run_message}
+                  </span>
+                )}
+              </div>
+              {err?.last_error && (
+                <div className="mt-2 rounded bg-rose-50 px-2 py-1 text-[10px] font-mono text-rose-700 break-words">
+                  ⚠ {err.last_error.slice(0, 140)}
+                </div>
+              )}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <button
+                  onClick={() => runOne(code)}
+                  disabled={!!busy}
+                  className="rounded border border-neutral-200 bg-white px-2 py-1 text-[11px] font-medium hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  {busy === code ? "Running…" : "Sync this store"}
+                </button>
+                <button
+                  onClick={() => runOne(code, true)}
+                  disabled={!!busy}
+                  className="rounded border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                  title="Wipe cursor and restart backfill from scratch"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between text-[11px] text-neutral-500">
+        <span>
+          Total mirrored: <strong className="tabular-nums">{totalRows.toLocaleString()}</strong> orders
+        </span>
+        <span>
+          Polled every 10s · runs in 90s chunks so a single click keeps making progress without timing out
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function SyncStatusPage() {
   const { user } = useDashboardSession();
   const [status, setStatus] = useState<{ sources: SourceRow[]; checkedAt: number } | null>(null);
@@ -415,6 +594,9 @@ function SyncStatusPage() {
             </div>
           </div>
         )}
+
+        {/* Shopify backfill panel — drives shopify_orders + shopify_sync_state */}
+        <ShopifyBackfillPanel />
 
         {/* Connector cards */}
         <div className="space-y-3">

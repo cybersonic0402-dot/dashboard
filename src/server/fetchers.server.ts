@@ -63,7 +63,7 @@ const SHOPIFY_STORES = [
   
 ] as const;
 
-async function getShopifyToken(store: string): Promise<string | null> {
+export async function getShopifyToken(store: string): Promise<string | null> {
   const clientId = process.env.SHOPIFY_APP_CLIENT_ID;
   const clientSecret = process.env.SHOPIFY_APP_CLIENT_SECRET;
   if (!clientId || !clientSecret || !store) return null;
@@ -769,7 +769,7 @@ const fxCache = new Map<string, Promise<number>>();
 // for non-EUR currencies — that silently corrupts UK/US revenue totals.
 const fxLastGood = new Map<string, { rate: number; at: number }>();
 
-async function getEurRate(currency: string, start: string, end: string): Promise<number> {
+export async function getEurRate(currency: string, start: string, end: string): Promise<number> {
   if (currency === "EUR") return 1;
   const key = `${currency}|${start}|${end}`;
   const cached = fxCache.get(key);

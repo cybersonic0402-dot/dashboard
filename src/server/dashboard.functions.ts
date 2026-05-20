@@ -521,6 +521,58 @@ export const runLoopSyncChunk = createServerFn({ method: "POST" })
     };
   });
 
+// ── Shopify sync triggers ────────────────────────────────────────────────
+// Same shape as the Loop trigger pair: a chunked driver that the UI can
+// poll until allDone, and a one-shot helper that drains all stores.
+export const runShopifySyncChunk = createServerFn({ method: "POST" })
+  .middleware([requireAdminUser])
+  .inputValidator((input: { store: "NL" | "UK" | "US"; reset?: boolean }) => ({
+    store: input.store,
+    reset: !!input.reset,
+  }))
+  .handler(async ({ data }) => {
+    const mod = await import("./shopify-sync.server");
+    if (data.reset) {
+      try {
+        await mod.resetShopifyState(data.store);
+      } catch (err: any) {
+        console.warn("[shopify] resetShopifyState failed (non-fatal):", err?.message);
+      }
+    }
+    const result = await mod.syncShopifyChunk(data.store, {
+      maxPages: 30,
+      timeBudgetMs: 45_000,
+    });
+    return result;
+  });
+
+export const triggerShopifyFullSync = createServerFn({ method: "POST" })
+  .middleware([requireAdminUser])
+  .handler(async () => {
+    const mod = await import("./shopify-sync.server");
+    // Single 90-second wall-budget drain. The chunk driver inside syncAllShopify
+    // keeps both stores in flight in parallel and stops as soon as either:
+    //   (a) allDone for every store, or
+    //   (b) the budget is exhausted (next click resumes).
+    const startedAt = new Date().toISOString();
+    const results = await mod.syncAllShopify({ wallBudgetMs: 90_000 });
+    return { ok: true, startedAt, finishedAt: new Date().toISOString(), results };
+  });
+
+export const getShopifySyncStatus = createServerFn({ method: "GET" })
+  .middleware([requireAllowedUser])
+  .handler(async () => {
+    const mod = await import("./shopify-sync.server");
+    const dbMod = await import("./shopify-db.server");
+    const [state, runs, errors, stats] = await Promise.all([
+      mod.getShopifySyncState(),
+      mod.getShopifySyncRuns(10),
+      mod.getShopifySyncErrors(),
+      dbMod.getShopifyOrdersStats(),
+    ]);
+    return { state, runs, errors, stats };
+  });
+
 export const triggerLoopFullSync = createServerFn({ method: "POST" })
   .middleware([requireAdminUser])
   .handler(async () => {
