@@ -109,8 +109,16 @@ export async function getShopifyToken(store: string): Promise<string | null> {
       return null;
     }
 
-    const { access_token, expires_in } = await res.json();
+    const tokenJson = await res.json();
+    const access_token = tokenJson?.access_token;
     if (!access_token) return null;
+    // Store the REAL granted scope from Shopify's response, not a hardcoded
+    // string. The cache-validity check above keys on this, so if the app's
+    // scopes change (e.g. read_all_orders is added), the next grant
+    // captures it and the `scopes.includes("read_all_orders")` gate
+    // becomes meaningful instead of always-true.
+    const grantedScope = String(tokenJson?.scope ?? "");
+    const expires_in = tokenJson?.expires_in;
 
     // 3. Cache the fresh token in Supabase
     const expiresAt = new Date(Date.now() + ((expires_in ?? 86400) - 600) * 1000).toISOString();
@@ -122,7 +130,15 @@ export async function getShopifyToken(store: string): Promise<string | null> {
           access_token,
           expires_at: expiresAt,
           updated_at: new Date().toISOString(),
-          metadata: { shop_domain: store, source: "client_credentials", scopes: "read_orders,read_all_orders" },
+          metadata: {
+            shop_domain: store,
+            source: "client_credentials",
+            // Shopify's token endpoint may omit `scope` for client_credentials
+            // on some app types; fall back to assuming the grant succeeded so
+            // we don't loop forever re-fetching. The real signal is whether
+            // orders >60d come back, surfaced separately.
+            scopes: grantedScope || "read_orders,read_all_orders",
+          },
         },
         { onConflict: "provider" },
       );
@@ -2257,6 +2273,35 @@ async function getXeroToken(): Promise<string | null> {
     return await __xeroTokenRefreshInFlight;
   }
 
+  // Cross-instance lock. Xero refresh tokens are single-use with reuse
+  // detection: if two serverless instances refresh the SAME token
+  // concurrently, Xero invalidates the entire token family and forces a
+  // re-login. The in-process guard above only serializes within one
+  // instance; this DB claim serializes across all of them. Only the
+  // instance that wins `claim_xero_refresh` actually calls Xero; the
+  // others wait for it to save the rotated token and read it back.
+  let ownsRefreshLock = false;
+  try {
+    const { data: claimed } = await (serviceClient() as any).rpc("claim_xero_refresh", {
+      lock_ttl_seconds: 30,
+    });
+    ownsRefreshLock = claimed === true;
+  } catch (err: any) {
+    // If the claim RPC is missing/errors, fall through and refresh anyway
+    // (degrades to the old behaviour rather than blocking all syncs).
+    console.warn("[xero] claim_xero_refresh failed, refreshing without lock:", err?.message ?? err);
+    ownsRefreshLock = true;
+  }
+  if (!ownsRefreshLock) {
+    // Another instance is refreshing. Poll for the token it saves.
+    const fresh = await useNewerXeroTokenIfAvailable(refreshToken);
+    if (fresh) return fresh;
+    // Lock holder hasn't saved yet (or died). Re-read once more; if still
+    // stale, fall through and attempt our own refresh as a last resort.
+    const latest = await readXeroTokenRow();
+    if (latest?.access_token && xeroTokenValidUntil(latest)) return latest.access_token;
+  }
+
   const refreshPromise = (async () => {
     try {
       const creds =
@@ -2307,7 +2352,15 @@ async function getXeroToken(): Promise<string | null> {
             refresh_token: finalRefresh,
             expires_at: expiresAt,
             updated_at: new Date().toISOString(),
-            metadata: { ...row.metadata, refresh_token: finalRefresh, refreshed_at: new Date().toISOString(), scope },
+            metadata: {
+              ...row.metadata,
+              refresh_token: finalRefresh,
+              refreshed_at: new Date().toISOString(),
+              scope,
+              // Release the cross-instance refresh lock on success so the
+              // next expiry cycle can claim it immediately.
+              refresh_lock_at: null,
+            },
           },
           { onConflict: "provider" },
         );

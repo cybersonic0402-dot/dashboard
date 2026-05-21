@@ -115,7 +115,7 @@ function MarginPerMarketPage() {
 
   return (
     <DashboardShell user={user} title="Margin per Market">
-      <div className="p-6">
+      <div className="p-6 space-y-4">
         {activeMarkets ? (
           <MarketsView
             liveMarkets={activeMarkets}
@@ -133,7 +133,213 @@ function MarginPerMarketPage() {
             <strong>Margin per Market</strong> requires Shopify &amp; Triple Whale data.
           </div>
         )}
+
+        {/* Retention LTV + unit-economics break-even ROAS */}
+        <RetentionEconomics econ={data?.retentionEconomics ?? null} />
       </div>
     </DashboardShell>
+  );
+}
+
+const DASH = "—";
+function eur(n: number | null | undefined, currency = "EUR") {
+  if (n == null || !Number.isFinite(n)) return DASH;
+  try {
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+  } catch {
+    return `€${Math.round(n).toLocaleString()}`;
+  }
+}
+function x2(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return DASH;
+  return `${n.toFixed(2)}×`;
+}
+function pct(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return DASH;
+  return `${n.toFixed(1)}%`;
+}
+
+const MARKET_NAMES: Record<string, string> = {
+  NL: "🇳🇱 Netherlands",
+  UK: "🇬🇧 United Kingdom",
+  US: "🇺🇸 United States",
+};
+
+function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
+  if (!econ || !Array.isArray(econ.markets) || econ.markets.length === 0) {
+    return (
+      <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-6 text-center text-[13px] text-neutral-500">
+        <strong>Retention &amp; unit economics</strong> — building cohorts from the Shopify orders
+        mirror. LTV windows fill in as order history accumulates (and once <code>read_all_orders</code> backfills the older years).
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {/* ── Retention / LTV ── */}
+      <div className="rounded-xl border bg-white shadow-sm p-5">
+        <div className="flex items-start justify-between flex-wrap gap-2">
+          <div>
+            <div className="text-[14px] font-semibold">Customer LTV by horizon</div>
+            <div className="mt-0.5 text-[12px] text-neutral-500">
+              True cohort LTV — average revenue within N days of each customer's first order ·
+              source: Shopify orders mirror
+            </div>
+          </div>
+          <span className="rounded-md bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+            Cohort-based
+          </span>
+        </div>
+        <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-100">
+          <table className="w-full min-w-[640px] text-[12px]">
+            <thead>
+              <tr className="bg-neutral-50 text-left text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+                <th className="px-3 py-2.5">Market</th>
+                <th className="px-3 py-2.5 text-right">60-day LTV</th>
+                <th className="px-3 py-2.5 text-right">90-day LTV</th>
+                <th className="px-3 py-2.5 text-right">180-day LTV</th>
+                <th className="px-3 py-2.5 text-right">1-year LTV</th>
+                <th className="px-3 py-2.5 text-right">Avg orders / cust</th>
+                <th className="px-3 py-2.5 text-right">LTV / CAC</th>
+              </tr>
+            </thead>
+            <tbody>
+              {econ.markets.map((m) => {
+                const ltvCell = (val: number | null, mature: number) =>
+                  val != null ? (
+                    <span className="tabular-nums">{eur(val, m.currency)}</span>
+                  ) : (
+                    <span className="text-neutral-400" title={`${mature} mature customers`}>
+                      maturing
+                    </span>
+                  );
+                return (
+                  <tr key={m.market} className="border-t border-neutral-100">
+                    <td className="px-3 py-2 font-medium">{MARKET_NAMES[m.market] ?? m.market}</td>
+                    <td className="px-3 py-2 text-right">{ltvCell(m.ltv60, m.matureCustomers60)}</td>
+                    <td className="px-3 py-2 text-right">{ltvCell(m.ltv90, m.matureCustomers90)}</td>
+                    <td className="px-3 py-2 text-right">{ltvCell(m.ltv180, m.matureCustomers180)}</td>
+                    <td className="px-3 py-2 text-right">{ltvCell(m.ltv365, m.matureCustomers365)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-neutral-600">
+                      {m.avgOrdersPerCustomer != null ? m.avgOrdersPerCustomer.toFixed(2) : DASH}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {m.ltvCac != null ? (
+                        <span
+                          className={`tabular-nums font-semibold ${m.ltvCac >= 3 ? "text-emerald-700" : m.ltvCac >= 1 ? "text-amber-600" : "text-rose-600"}`}
+                        >
+                          {x2(m.ltvCac)}
+                          {m.ltvCacWindow && (
+                            <span className="ml-1 text-[10px] font-normal text-neutral-400">
+                              ({m.ltvCacWindow})
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        DASH
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-2 text-[10px] text-neutral-400">
+          "maturing" = no cohorts old enough for that window yet. LTV/CAC uses the longest mature
+          window available · ≥3× healthy (green), 1–3× watch (amber), &lt;1× losing money (red).
+        </div>
+      </div>
+
+      {/* ── Unit economics / break-even ROAS ── */}
+      <div className="rounded-xl border bg-white shadow-sm p-5">
+        <div className="flex items-start justify-between flex-wrap gap-2">
+          <div>
+            <div className="text-[14px] font-semibold">Unit economics &amp; break-even ROAS</div>
+            <div className="mt-0.5 text-[12px] text-neutral-500">
+              The marketing efficiency needed to break even at three cost levels · per market
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+          {econ.markets.map((m) => {
+            const beRow = (
+              label: string,
+              value: number | null,
+              hint: string,
+              tone: string,
+            ) => (
+              <div className="flex items-center justify-between gap-2 border-t border-neutral-100 py-2 first:border-t-0">
+                <div className="min-w-0">
+                  <div className="text-[12px] font-medium text-neutral-700">{label}</div>
+                  <div className="text-[10px] text-neutral-400">{hint}</div>
+                </div>
+                <div className={`text-[16px] font-semibold tabular-nums shrink-0 ${tone}`}>{x2(value)}</div>
+              </div>
+            );
+            // Headroom: how far current blended ROAS sits above the full
+            // (OpEx-inclusive) break-even. Positive = room to lower targets.
+            const headroom =
+              m.blendedRoas != null && m.breakEvenRoasOpex != null
+                ? m.blendedRoas - m.breakEvenRoasOpex
+                : null;
+            return (
+              <div key={m.market} className="rounded-lg border border-neutral-200 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-[13px] font-semibold">{MARKET_NAMES[m.market] ?? m.market}</div>
+                  <div className="text-[10px] text-neutral-400">
+                    AOV {eur(m.aov, m.currency)} · CAC {eur(m.cac, m.currency)}
+                  </div>
+                </div>
+                <div className="mt-2">
+                  {beRow(
+                    "Product margin",
+                    m.breakEvenRoasProduct,
+                    `COGS ${pct(m.cogsPct)}`,
+                    "text-neutral-900",
+                  )}
+                  {beRow(
+                    "Incl. delivery",
+                    m.breakEvenRoasDelivery,
+                    `+ ship ${pct(m.shippingPct)} · fees ${pct(m.paymentFeePct)} · fulfil ${pct(m.fulfilmentPct)}`,
+                    "text-neutral-900",
+                  )}
+                  {beRow(
+                    "Incl. fixed OpEx",
+                    m.breakEvenRoasOpex,
+                    `+ OpEx/order ${eur(m.opexPerOrder, m.currency)}`,
+                    "text-neutral-900",
+                  )}
+                </div>
+                <div className="mt-3 rounded-md bg-neutral-50 px-3 py-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-neutral-500">Current blended ROAS</span>
+                    <span className="font-semibold tabular-nums">{x2(m.blendedRoas)}</span>
+                  </div>
+                  {headroom != null && (
+                    <div
+                      className={`mt-1 text-[11px] font-medium ${headroom >= 0 ? "text-emerald-700" : "text-rose-600"}`}
+                    >
+                      {headroom >= 0
+                        ? `${x2(headroom)} above full break-even — room to lower targets & scale`
+                        : `${x2(Math.abs(headroom))} below full break-even — tighten targets`}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-3 text-[10px] text-neutral-400 leading-relaxed">
+          Break-even ROAS = revenue per €1 ad spend needed to not lose money at that cost level.
+          <strong> Product margin</strong> covers COGS only · <strong>Incl. delivery</strong> adds
+          shipping + payment fees + fulfilment · <strong>Incl. fixed OpEx</strong> also covers the
+          allocated monthly operating cost per order. If current blended ROAS sits comfortably above
+          the OpEx-inclusive figure, you can lower acquisition targets to scale new-customer intake
+          (future repeat orders bring the cash back).
+        </div>
+      </div>
+    </>
   );
 }

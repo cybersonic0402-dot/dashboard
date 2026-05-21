@@ -452,6 +452,14 @@ export async function syncShopifyChunk(
       break;
     }
     rowsUpserted += mapped.length;
+    // A page upserted cleanly → clear any prior stuck-error row for this
+    // store. Previously errors were only resolved when the whole sweep
+    // finished, so a transient failure (or a since-fixed schema error)
+    // kept showing in the UI for the entire multi-chunk backfill even
+    // though sync had recovered. Resolve on first success instead.
+    if (rowsUpserted === mapped.length) {
+      await resolveError(code).catch(() => {});
+    }
     // Track newest updated_at seen so we can use it as the next
     // incremental high-water mark.
     for (const r of mapped) {

@@ -348,6 +348,21 @@ export const getDashboardData = createServerFn({ method: "GET" }).middleware([re
     console.error("getDashboardData manual data failed:", err?.message);
   }
 
+  // Retention (cohort LTV) + per-market unit economics / break-even ROAS.
+  // Cheap: one Supabase RPC over the shopify_orders mirror plus pure
+  // arithmetic on already-loaded TW + Xero caches. Non-fatal on failure.
+  let retentionEconomics: any = null;
+  try {
+    const { fetchRetentionEconomics } = await import("./retention-economics.server");
+    retentionEconomics = await fetchRetentionEconomics(
+      Array.isArray(tripleWhaleCache?.payload) ? tripleWhaleCache.payload : null,
+      xeroCache?.payload ?? null,
+      Array.isArray(shopifyMonthlyCache?.payload) ? shopifyMonthlyCache.payload : null,
+    );
+  } catch (err: any) {
+    console.error("getDashboardData retention economics failed:", err?.message);
+  }
+
   return {
     shopifyMarkets: shopifyMarketsCache?.payload ?? null,
     shopifyMonthly: shopifyMonthlyCache?.payload ?? null,
@@ -368,6 +383,7 @@ export const getDashboardData = createServerFn({ method: "GET" }).middleware([re
     jortt: jorttCache?.payload ?? null,
     xero: xeroCache?.payload ?? null,
     picqer: picqerCache?.payload ?? null,
+    retentionEconomics,
     connections: getConnections(),
     sourceStatus: buildSourceStatus(cache),
     syncedAt: oldestSyncedAt,
@@ -539,9 +555,11 @@ export const runShopifySyncChunk = createServerFn({ method: "POST" })
         console.warn("[shopify] resetShopifyState failed (non-fatal):", err?.message);
       }
     }
+    // 40s budget keeps a single-store chunk safely under the 60s Vercel
+    // function cap (vercel.json). Resumable, so the next click continues.
     const result = await mod.syncShopifyChunk(data.store, {
       maxPages: 30,
-      timeBudgetMs: 45_000,
+      timeBudgetMs: 40_000,
     });
     return result;
   });
@@ -550,12 +568,14 @@ export const triggerShopifyFullSync = createServerFn({ method: "POST" })
   .middleware([requireAdminUser])
   .handler(async () => {
     const mod = await import("./shopify-sync.server");
-    // Single 90-second wall-budget drain. The chunk driver inside syncAllShopify
-    // keeps both stores in flight in parallel and stops as soon as either:
-    //   (a) allDone for every store, or
-    //   (b) the budget is exhausted (next click resumes).
+    // 45-second wall budget. The Vercel function cap (vercel.json
+    // maxDuration) is 60s; a 90s budget got the function killed mid-run
+    // and the browser saw "Failed to fetch". 45s leaves headroom for the
+    // final upsert + state write to flush before the platform limit. The
+    // sync is resumable, so a click that doesn't finish just means the
+    // next click picks up from the saved cursor.
     const startedAt = new Date().toISOString();
-    const results = await mod.syncAllShopify({ wallBudgetMs: 90_000 });
+    const results = await mod.syncAllShopify({ wallBudgetMs: 45_000 });
     return { ok: true, startedAt, finishedAt: new Date().toISOString(), results };
   });
 

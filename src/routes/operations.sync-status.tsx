@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshCw, Plug, AlertCircle, ChevronRight, LayoutGrid } from "lucide-react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
@@ -221,14 +221,40 @@ function ShopifyBackfillPanel() {
   const [status, setStatus] = useState<any>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // When true, the panel keeps firing sync chunks back-to-back until every
+  // store's backfill is complete — no manual re-clicking. Each chunk is a
+  // bounded ~45s server call (under the Vercel function cap), and the loop
+  // re-fires as soon as the previous one returns, so a single "Auto-sync"
+  // click drives the whole multi-hundred-thousand-order backfill to done.
+  const [autoRun, setAutoRun] = useState(false);
+  const autoRunRef = useRef(false);
+  const busyRef = useRef(false);
 
   const load = async () => {
     try {
       const s = await getShopifySyncStatus();
       setStatus(s);
       setError(null);
+      return s;
     } catch (err: any) {
-      setError(err?.message ?? "Failed to load status");
+      const raw = String(err?.message ?? err ?? "");
+      // A "Cannot GET /_serverFn/…" HTML body means the running server
+      // bundle doesn't have this server function registered — i.e. the
+      // deployment is older than the client bundle the browser loaded.
+      // Show a concise, actionable message instead of dumping the raw
+      // HTML error page, and stop the auto-loop so it doesn't hammer a
+      // dead endpoint.
+      const isBundleMismatch =
+        raw.includes("Cannot GET") || raw.includes("_serverFn") || raw.includes("<!DOCTYPE");
+      if (isBundleMismatch) {
+        setError(
+          "Server is running an older build than this page — the Shopify sync endpoint isn't deployed yet. Redeploy (or restart the dev server) and hard-refresh this page.",
+        );
+        setAutoRun(false);
+      } else {
+        setError(raw.slice(0, 200) || "Failed to load status");
+      }
+      return null;
     }
   };
 
@@ -247,9 +273,11 @@ function ShopifyBackfillPanel() {
 
   const totalRows = stores.reduce((s, x) => s + (x.stats?.rowCount ?? 0), 0);
   const anyRunning = stores.some((x) => x.state?.last_run_status === "running");
+  const allComplete = stores.length > 0 && stores.every((x) => x.state?.backfill_complete);
 
   async function runAll() {
     setBusy("all");
+    busyRef.current = true;
     setError(null);
     try {
       await triggerShopifyFullSync();
@@ -258,8 +286,45 @@ function ShopifyBackfillPanel() {
       setError(err?.message ?? "Sync failed");
     } finally {
       setBusy(null);
+      busyRef.current = false;
     }
   }
+
+  // Auto-sync driver. Re-fires runAll the moment the previous chunk settles,
+  // as long as auto-run is on and at least one store's backfill is still
+  // incomplete. Stops itself when everything is mirrored. Uses refs so the
+  // loop reads live values, not stale closure state.
+  useEffect(() => {
+    autoRunRef.current = autoRun;
+    if (!autoRun) return;
+    let cancelled = false;
+    (async () => {
+      while (!cancelled && autoRunRef.current) {
+        // Re-read status to decide whether to keep going
+        const s = await load();
+        const done =
+          s &&
+          ["NL", "UK", "US"].every((c) =>
+            (s.state ?? []).find((r: any) => r.store_code === c)?.backfill_complete,
+          );
+        if (done) {
+          setAutoRun(false);
+          break;
+        }
+        if (!busyRef.current) {
+          await runAll();
+        } else {
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        // small gap so we don't hammer the function on fast failures
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun]);
 
   async function runOne(store: "NL" | "UK" | "US", reset = false) {
     setBusy(`${store}${reset ? ":reset" : ""}`);
@@ -285,13 +350,35 @@ function ShopifyBackfillPanel() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={runAll}
-            disabled={!!busy}
-            className="inline-flex items-center gap-2 rounded-md bg-neutral-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
-          >
-            {busy === "all" ? "Running…" : anyRunning ? "Resume sync" : "Run sync"}
-          </button>
+          {allComplete ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-3 py-1.5 text-[13px] font-medium text-emerald-700">
+              All stores mirrored
+            </span>
+          ) : autoRun ? (
+            <button
+              onClick={() => setAutoRun(false)}
+              className="inline-flex items-center gap-2 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-[13px] font-semibold text-neutral-700 hover:bg-neutral-50"
+            >
+              ⏸ Stop auto-sync{busy === "all" ? " (running…)" : ""}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => setAutoRun(true)}
+                disabled={!!busy}
+                className="inline-flex items-center gap-2 rounded-md bg-neutral-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
+              >
+                ▶ Auto-sync until done
+              </button>
+              <button
+                onClick={runAll}
+                disabled={!!busy}
+                className="inline-flex items-center gap-2 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-[13px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+              >
+                {busy === "all" ? "Running…" : "One chunk"}
+              </button>
+            </>
+          )}
         </div>
       </div>
 

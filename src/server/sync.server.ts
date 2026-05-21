@@ -58,7 +58,19 @@ const ALL_JOBS: Job[] = [
     name: "shopify_monthly",
     provider: "shopify",
     key: "monthly",
-    fn: fetchShopifyMonthly,
+    // Prefer the Postgres mirror (full multi-year history, no 60-day cap).
+    // Falls back to the live API only when the mirror hasn't been backfilled
+    // yet, so a fresh environment still shows recent months.
+    fn: async () => {
+      try {
+        const dbMod = await import("./shopify-db.server");
+        const fromDb = await dbMod.fetchShopifyMonthlyFromDb(13);
+        if (fromDb && fromDb.length > 0) return fromDb;
+      } catch (err: any) {
+        console.warn("[sync] shopify_monthly DB read failed, falling back to live:", err?.message);
+      }
+      return fetchShopifyMonthly();
+    },
     maxAgeMin: 60,
   },
   {
@@ -72,7 +84,17 @@ const ALL_JOBS: Job[] = [
     name: "shopify_daily",
     provider: "shopify",
     key: "daily",
-    fn: fetchShopifyDaily,
+    // Mirror-backed (full history); live API fallback when not yet backfilled.
+    fn: async () => {
+      try {
+        const dbMod = await import("./shopify-db.server");
+        const fromDb = await dbMod.fetchShopifyDailyFromDb(400);
+        if (fromDb && fromDb.daily && Object.keys(fromDb.daily).length > 0) return fromDb;
+      } catch (err: any) {
+        console.warn("[sync] shopify_daily DB read failed, falling back to live:", err?.message);
+      }
+      return fetchShopifyDaily();
+    },
     maxAgeMin: 720,
   },
   {
@@ -299,13 +321,15 @@ export function refreshStaleInBackground(cache: CacheMap): void {
         job.key === "monthly" &&
         !payload?.__error &&
         Array.isArray(payload) &&
-        payload.some((row: any) => row?.calcVersion !== 3)) ||
+        // Accept either the live-API calc (3) or the mirror-backed calc (4).
+        payload.some((row: any) => ![3, 4].includes(row?.calcVersion))) ||
       (job.provider === "shopify" &&
         job.key === "daily" &&
         payload &&
         !payload.__empty &&
         !payload.__error &&
-        payload.calcVersion !== 2) ||
+        // Live-API daily = 2, mirror-backed daily = 3.
+        ![2, 3].includes(payload.calcVersion)) ||
       (job.provider === "shopify" &&
         job.key === "repeat_funnel" &&
         payload &&
