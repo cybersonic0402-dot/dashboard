@@ -91,62 +91,45 @@ async function selectOrderRange(
  * to change.
  */
 export async function fetchShopifyMonthlyFromDb(monthsBack = 12) {
-  const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (monthsBack - 1), 1));
-  const fromIso = start.toISOString();
-  const toIso = new Date().toISOString();
-
-  const rows = await selectOrderRange(null, fromIso, toIso);
+  // Aggregate in Postgres (shopify_monthly_agg) so we transfer ~30 rows
+  // instead of pulling 250k+ order rows into memory and paginating. The
+  // old row-scan approach blew the sync's time budget and silently wrote
+  // nothing → the dashboard showed €0. Currency conversion to EUR happens
+  // here on the small grouped result.
+  const { data, error } = await (supabaseAdmin as any).rpc("shopify_monthly_agg", {
+    months_back: monthsBack,
+  });
+  if (error) throw new Error(`shopify_monthly_agg: ${error.message}`);
+  const rows = (data ?? []) as Array<{
+    month_start: string;
+    store_code: string;
+    currency: string;
+    revenue: number;
+    refunds: number;
+    orders: number;
+  }>;
   if (rows.length === 0) return null;
 
-  // Aggregate in source currency first, convert to EUR last using the
-  // month's exchange rate (matches the legacy fetcher's behaviour where
-  // a single rate applies for an entire month).
-  type Agg = { revenue: number; orders: number; refunds: number };
-  const byMonth: Record<
-    string,
-    { totals: Agg; perMarket: Record<string, Agg & { currency: string }> }
-  > = {};
-
-  for (const o of rows) {
-    const d = new Date(o.shopify_created_at);
-    if (isNaN(d.getTime())) continue;
+  // Group by month label
+  const byMonth = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const d = new Date(r.month_start + "T00:00:00Z");
     const month = monthKeyFromDate(d);
-    const code = String(o.store_code) as StoreCode;
-    const currency = o.currency || MARKET_CURRENCY[code] || "EUR";
-    const total = Number(o.total_price ?? 0);
-    const refund = Number(o.total_refunded ?? 0);
-    const net = total - refund;
-
-    if (!byMonth[month]) {
-      byMonth[month] = {
-        totals: { revenue: 0, orders: 0, refunds: 0 },
-        perMarket: {},
-      };
-    }
-    const m = byMonth[month];
-    if (!m.perMarket[code]) m.perMarket[code] = { revenue: 0, orders: 0, refunds: 0, currency };
-    m.perMarket[code].revenue += net;
-    m.perMarket[code].refunds += refund;
-    m.perMarket[code].orders += 1;
+    if (!byMonth.has(month)) byMonth.set(month, []);
+    byMonth.get(month)!.push(r);
   }
 
-  // Convert each (month, market) sub-total to EUR.
-  const sortedMonthKeys = Object.keys(byMonth).sort(
+  const sortedMonths = Array.from(byMonth.keys()).sort(
     (a, b) =>
       new Date("1 " + a.replace("'", "20")).getTime() -
       new Date("1 " + b.replace("'", "20")).getTime(),
   );
 
   const out: any[] = [];
-  for (const month of sortedMonthKeys) {
-    const m = byMonth[month];
-    // First day of the month → last day
+  for (const month of sortedMonths) {
     const monthDate = new Date("1 " + month.replace("'", "20"));
     const monthStart = `${monthDate.getUTCFullYear()}-${String(monthDate.getUTCMonth() + 1).padStart(2, "0")}-01`;
-    const monthEnd = new Date(
-      Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0),
-    )
+    const monthEnd = new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0))
       .toISOString()
       .split("T")[0];
 
@@ -154,14 +137,16 @@ export async function fetchShopifyMonthlyFromDb(monthsBack = 12) {
     let totalRev = 0;
     let totalRefunds = 0;
     let totalOrders = 0;
-    for (const [code, agg] of Object.entries(m.perMarket)) {
-      const rate = await eurRate(agg.currency, monthStart, monthEnd);
-      const rev = +(agg.revenue * rate).toFixed(2);
-      const rfn = +(agg.refunds * rate).toFixed(2);
-      byMarket[code] = { revenue: rev, orders: agg.orders, refunds: rfn };
+    for (const r of byMonth.get(month)!) {
+      const code = String(r.store_code);
+      const currency = r.currency || MARKET_CURRENCY[code as StoreCode] || "EUR";
+      const rate = await eurRate(currency, monthStart, monthEnd);
+      const rev = +(Number(r.revenue) * rate).toFixed(2);
+      const rfn = +(Number(r.refunds) * rate).toFixed(2);
+      byMarket[code] = { revenue: rev, orders: Number(r.orders), refunds: rfn };
       totalRev += rev;
       totalRefunds += rfn;
-      totalOrders += agg.orders;
+      totalOrders += Number(r.orders);
     }
     out.push({
       month,
@@ -169,7 +154,7 @@ export async function fetchShopifyMonthlyFromDb(monthsBack = 12) {
       orders: totalOrders,
       refunds: +totalRefunds.toFixed(2),
       byMarket,
-      calcVersion: 4, // bump so cache check refreshes consumers
+      calcVersion: 4,
     });
   }
   return out;
@@ -182,37 +167,38 @@ export async function fetchShopifyMonthlyFromDb(monthsBack = 12) {
  * on the Daily P&L pillar consumes.
  */
 export async function fetchShopifyDailyFromDb(daysBack = 90) {
-  const now = new Date();
-  const start = new Date(now);
-  start.setUTCDate(start.getUTCDate() - daysBack);
-  const fromIso = start.toISOString();
-  const toIso = now.toISOString();
-
-  const rows = await selectOrderRange(null, fromIso, toIso);
+  // SQL-aggregated per (day, currency) — see shopify_daily_agg. Avoids the
+  // 250k-row in-memory scan that the monthly path also suffered from.
+  const { data, error } = await (supabaseAdmin as any).rpc("shopify_daily_agg", {
+    days_back: daysBack,
+  });
+  if (error) throw new Error(`shopify_daily_agg: ${error.message}`);
+  const rows = (data ?? []) as Array<{ day: string; currency: string; revenue: number }>;
   if (rows.length === 0) return null;
 
-  // Aggregate per (day, currency) so the FX conversion uses an
-  // appropriate per-day rate (cached upstream).
-  type Bucket = Record<string, number>; // currency → amount
-  const perDay: Record<string, Bucket> = {};
-  for (const o of rows) {
-    const d = new Date(o.shopify_created_at);
-    if (isNaN(d.getTime())) continue;
-    const day = dayKeyFromDate(d);
-    const currency =
-      o.currency || MARKET_CURRENCY[o.store_code as StoreCode] || "EUR";
-    const total = Number(o.total_price ?? 0);
-    const refund = Number(o.total_refunded ?? 0);
-    const net = total - refund;
+  // Group per day, FX-convert each currency bucket to EUR (one rate per
+  // currency reused across days to keep getEurRate calls bounded).
+  const perDay: Record<string, Record<string, number>> = {};
+  for (const r of rows) {
+    const day = String(r.day).slice(0, 10);
     if (!perDay[day]) perDay[day] = {};
-    perDay[day][currency] = (perDay[day][currency] ?? 0) + net;
+    perDay[day][r.currency] = (perDay[day][r.currency] ?? 0) + Number(r.revenue);
   }
 
   const daily: Record<string, { revenue: number }> = {};
+  // Cache FX rates per (currency, month) so we don't call getEurRate for
+  // every single day — daily rates within a month are close enough and
+  // this keeps a 400-day pull to a dozen rate lookups.
+  const rateCache = new Map<string, number>();
   for (const [day, currMap] of Object.entries(perDay)) {
     let revenue = 0;
     for (const [currency, amount] of Object.entries(currMap)) {
-      const rate = await eurRate(currency, day, day);
+      const monthKey = `${currency}:${day.slice(0, 7)}`;
+      let rate = rateCache.get(monthKey);
+      if (rate == null) {
+        rate = await eurRate(currency, day, day);
+        rateCache.set(monthKey, rate);
+      }
       revenue += amount * rate;
     }
     daily[day] = { revenue: +revenue.toFixed(2) };
