@@ -264,6 +264,12 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
           {econ.markets.map((m) => {
+            const aovForCac = Number(m.aov ?? 0);
+            // Break-even ROAS = AOV / CAC, so the max spendable CAC at that
+            // level is AOV ÷ break-even ROAS. This is the € the user can pay
+            // to acquire a customer before losing money at that cost level.
+            const maxCac = (roas: number | null) =>
+              roas != null && roas > 0 && aovForCac > 0 ? aovForCac / roas : null;
             const beRow = (
               label: string,
               value: number | null,
@@ -275,7 +281,12 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
                   <div className="text-[12px] font-medium text-neutral-700">{label}</div>
                   <div className="text-[10px] text-neutral-400">{hint}</div>
                 </div>
-                <div className={`text-[16px] font-semibold tabular-nums shrink-0 ${tone}`}>{x2(value)}</div>
+                <div className="text-right shrink-0">
+                  <div className={`text-[16px] font-semibold tabular-nums ${tone}`}>{x2(value)}</div>
+                  <div className="text-[10px] text-neutral-400 tabular-nums">
+                    max CAC {eur(maxCac(value), m.currency)}
+                  </div>
+                </div>
               </div>
             );
             // Headroom: how far current blended ROAS sits above the full
@@ -292,26 +303,39 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
                     AOV {eur(m.aov, m.currency)} · CAC {eur(m.cac, m.currency)}
                   </div>
                 </div>
-                <div className="mt-2">
-                  {beRow(
-                    "Product margin",
-                    m.breakEvenRoasProduct,
-                    `COGS ${pct(m.cogsPct)}`,
-                    "text-neutral-900",
-                  )}
-                  {beRow(
-                    "Incl. delivery",
-                    m.breakEvenRoasDelivery,
-                    `+ ship ${pct(m.shippingPct)} · fees ${pct(m.paymentFeePct)} · fulfil ${pct(m.fulfilmentPct)}`,
-                    "text-neutral-900",
-                  )}
-                  {beRow(
-                    "Incl. fixed OpEx",
-                    m.breakEvenRoasOpex,
-                    `+ OpEx/order ${eur(m.opexPerOrder, m.currency)}`,
-                    "text-neutral-900",
-                  )}
-                </div>
+                {(() => {
+                  // Per-order € amounts = AOV × the cost ratio. Shown next
+                  // to the % so the user sees both "8.0%" and "€5.68/order".
+                  const aovVal = Number(m.aov ?? 0);
+                  const amt = (p: number | null | undefined) =>
+                    p != null && Number.isFinite(p) ? eur((aovVal * p) / 100, m.currency) : DASH;
+                  const cogsAmt = amt(m.cogsPct);
+                  const shipAmt = amt(m.shippingPct);
+                  const feeAmt = amt(m.paymentFeePct);
+                  const fulfilAmt = amt(m.fulfilmentPct);
+                  return (
+                    <div className="mt-2">
+                      {beRow(
+                        "Product margin",
+                        m.breakEvenRoasProduct,
+                        `COGS ${cogsAmt} (${pct(m.cogsPct)})`,
+                        "text-neutral-900",
+                      )}
+                      {beRow(
+                        "Incl. delivery",
+                        m.breakEvenRoasDelivery,
+                        `+ ship ${shipAmt} · fees ${feeAmt} · fulfil ${fulfilAmt} /order`,
+                        "text-neutral-900",
+                      )}
+                      {beRow(
+                        "Incl. fixed OpEx",
+                        m.breakEvenRoasOpex,
+                        `+ OpEx ${eur(m.opexPerOrder, m.currency)}/order`,
+                        "text-neutral-900",
+                      )}
+                    </div>
+                  );
+                })()}
                 <div className="mt-3 rounded-md bg-neutral-50 px-3 py-2">
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="text-neutral-500">Current blended ROAS</span>
