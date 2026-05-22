@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireAdminUser, requireAllowedUser } from "./auth.middleware";
-import { readCacheKeys, writeCache, ageMinutes, type CacheMap } from "./cache.server";
+import { readCache, readCacheKeys, writeCache, ageMinutes, type CacheMap } from "./cache.server";
 import { refreshStaleInBackground, runAll } from "./sync.server";
 import {
   fetchTripleWhale,
@@ -216,6 +216,7 @@ export const getDashboardData = createServerFn({ method: "GET" }).middleware([re
     ["jortt", "invoices"],
     ["xero", "accounting"],
     ["picqer", "inventory"],
+    ["instagram", "followers"],
   ]);
   const get = (provider: string, key: string) => cache[`${provider}/${key}`] ?? null;
 
@@ -383,6 +384,7 @@ export const getDashboardData = createServerFn({ method: "GET" }).middleware([re
     jortt: jorttCache?.payload ?? null,
     xero: xeroCache?.payload ?? null,
     picqer: picqerCache?.payload ?? null,
+    instagram: get("instagram", "followers")?.payload ?? null,
     retentionEconomics,
     connections: getConnections(),
     sourceStatus: buildSourceStatus(cache),
@@ -454,6 +456,53 @@ export const triggerPicqerSyncNow = createServerFn({ method: "POST" }).middlewar
       fetchedAt: new Date().toISOString(),
     });
     return { ok: false, finishedAt: new Date().toISOString(), error: message };
+  }
+});
+
+// Instagram follower sync — Graph API with public-endpoint fallback.
+// Writes to data_cache (instagram/followers) so the Valuation page reads
+// the live count without re-fetching on every render.
+export const triggerInstagramSync = createServerFn({ method: "POST" }).middleware([requireAllowedUser]).handler(async () => {
+  const { fetchInstagramFollowers } = await import("./instagram.server");
+  const result = await fetchInstagramFollowers();
+  await writeCache("instagram", "followers", result);
+  return result;
+});
+
+export const getInstagramFollowers = createServerFn({ method: "GET" }).middleware([requireAllowedUser]).handler(async () => {
+  const cached = await readCache("instagram", "followers");
+  return cached?.payload ?? null;
+});
+
+// Full Instagram profile (bio, stats, recent posts) for the standalone
+// /ig_zapply page. Fetches live, caches, and falls back to the last cached
+// payload if the live pull is blocked (429 from datacenter IPs).
+export const getInstagramProfile = createServerFn({ method: "GET" }).middleware([requireAllowedUser]).handler(async () => {
+  // Bulletproof: never throw — always return a profile-shaped object so the
+  // page can render the real error instead of a null (which the UI was
+  // mislabelling as a generic "rate-limited").
+  try {
+    const { fetchInstagramProfile } = await import("./instagram.server");
+    const live = await fetchInstagramProfile();
+    if (live && live.followers != null) {
+      await writeCache("instagram", "profile", live);
+      return live;
+    }
+    const cached = await readCache("instagram", "profile");
+    if (cached?.payload) {
+      return { ...(cached.payload as any), stale: true, liveError: live?.error ?? null };
+    }
+    return live; // carries the real error string
+  } catch (err: any) {
+    return {
+      username: "zapply_",
+      followers: null,
+      following: null,
+      postsCount: null,
+      posts: [],
+      fetchedAt: new Date().toISOString(),
+      error: `Server error: ${err?.message ?? String(err)}`,
+    };
   }
 });
 

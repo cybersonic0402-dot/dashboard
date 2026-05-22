@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw, Plug, AlertCircle, ChevronRight, LayoutGrid } from "lucide-react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getSyncStatus, getDashboardData, triggerSyncNow, triggerXeroSyncNow, triggerPicqerSyncNow, getLoopStoreStatus, getLoopApiPendingCount, triggerLoopFullSync, runLoopSyncChunk, triggerShopifyFullSync, getShopifySyncStatus, runShopifySyncChunk } from "@/server/dashboard.functions";
+import { getSyncStatus, getDashboardData, triggerSyncNow, triggerXeroSyncNow, triggerPicqerSyncNow, getLoopStoreStatus, getLoopApiPendingCount, triggerLoopFullSync, runLoopSyncChunk, triggerShopifyFullSync, getShopifySyncStatus, runShopifySyncChunk, triggerInstagramSync, getInstagramFollowers } from "@/server/dashboard.functions";
 
 export const Route = createFileRoute("/operations/sync-status")({
   head: () => ({ meta: [{ title: "Sync status — Zapply" }] }),
@@ -217,6 +217,83 @@ function freshestAge(rows: SourceRow[]): number | null {
 // shopify-sync.server.ts. Polls status every 10s while a backfill is
 // running so the user can see the cursor advance and the row counts
 // climb in real time.
+// Instagram follower sync — Graph API (if configured) with public-endpoint
+// fallback. One-click refresh; shows the live count + source + last pull.
+function InstagramPanel() {
+  const [result, setResult] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getInstagramFollowers().then(setResult).catch(() => {});
+  }, []);
+
+  async function sync() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await triggerInstagramSync();
+      setResult(r);
+      if (r?.error && r?.followers == null) setError(r.error);
+    } catch (err: any) {
+      setError(err?.message ?? "Sync failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const followers = result?.followers ?? null;
+  const fmt = (n: number | null) =>
+    n == null ? "—" : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="grid h-10 w-10 place-items-center rounded-lg bg-pink-50">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 text-pink-600" aria-hidden>
+              <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+              <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+            </svg>
+          </div>
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold">Instagram followers · @zapply_</div>
+            <div className="mt-0.5 text-[12px] text-neutral-500">
+              {followers != null ? (
+                <>
+                  <span className="font-semibold text-neutral-800">{fmt(followers)}</span> followers
+                  {result?.source ? ` · via ${result.source === "graph" ? "Meta Graph API" : "public endpoint"}` : ""}
+                  {result?.fetchedAt ? ` · ${new Date(result.fetchedAt).toLocaleString("en-GB")}` : ""}
+                </>
+              ) : (
+                "Not synced yet — click Sync to pull the live count."
+              )}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={sync}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-md bg-neutral-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-neutral-800 disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
+          {busy ? "Syncing…" : "Sync followers"}
+        </button>
+      </div>
+      {error && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+          {error}
+          <div className="mt-1 text-[11px] text-amber-700/80">
+            Instagram blocks datacenter IPs on the public endpoint. For reliable counts, set{" "}
+            <code>INSTAGRAM_GRAPH_TOKEN</code> + <code>INSTAGRAM_BUSINESS_ACCOUNT_ID</code> (Meta Graph API).
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ShopifyBackfillPanel() {
   const [status, setStatus] = useState<any>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -684,6 +761,9 @@ function SyncStatusPage() {
 
         {/* Shopify backfill panel — drives shopify_orders + shopify_sync_state */}
         <ShopifyBackfillPanel />
+
+        {/* Instagram followers sync */}
+        <InstagramPanel />
 
         {/* Connector cards */}
         <div className="space-y-3">

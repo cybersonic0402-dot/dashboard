@@ -3,7 +3,32 @@ import { useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
 import { getDashboardData } from "@/server/dashboard.functions";
-import { Briefcase, TrendingUp, Wallet, Building2, Info, Sliders } from "lucide-react";
+import { setAppSetting } from "@/server/manual-data.functions";
+import {
+  Briefcase, TrendingUp, Wallet, Building2, Info, Sliders,
+  DollarSign, Repeat, UserMinus, Star, Users, Pencil,
+} from "lucide-react";
+
+// Inline Instagram glyph — lucide-react 1.9.0 doesn't export an Instagram
+// icon, so we draw it: rounded-square camera body, lens circle, flash dot.
+function InstagramGlyph({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+      <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+      <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+    </svg>
+  );
+}
 
 export const Route = createFileRoute("/pillars/valuation")({
   head: () => ({ meta: [{ title: "Business Valuation — Zapply" }] }),
@@ -594,6 +619,9 @@ function ValuationPage() {
             </div>
           </div>
 
+          {/* Headline metric circles */}
+          <MetricCircles data={data} inputs={inputs} onSaved={() => getDashboardData().then(setData)} />
+
           {/* Method breakdown */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
             <MethodCard
@@ -779,6 +807,244 @@ function ValuationPage() {
         </div>
       </div>
     </DashboardShell>
+  );
+}
+
+// ─── HEADLINE METRIC CIRCLES ───────────────────────────────────────────────
+// A row of compact circular stat badges. Four are data-backed (Revenue, MRR,
+// EBITDA, Churn); three are operator-supplied (Trustpilot reviews, headcount
+// for revenue/employee, Instagram followers) and persist to app_settings via
+// an inline click-to-edit. External metrics show "—" with a pencil until set.
+function MetricCircles({
+  data,
+  inputs,
+  onSaved,
+}: {
+  data: any;
+  inputs: DerivedInputs;
+  onSaved: () => void;
+}) {
+  // MRR + churn from the subscription markets (Juo + Loop), EUR-normalised.
+  const subs = [
+    ...(Array.isArray(data?.juo) ? data.juo : []),
+    ...(Array.isArray(data?.loop) ? data.loop : []),
+  ].filter((m: any) => m?.live !== false);
+  const mrr = subs.reduce(
+    (s: number, m: any) => s + Number(m?.mrr ?? 0) * Number(m?.fxRate ?? 1),
+    0,
+  );
+  const totalActive = subs.reduce((s: number, m: any) => s + Number(m?.activeSubs ?? 0), 0);
+  const totalChurned = subs.reduce((s: number, m: any) => s + Number(m?.churnedThisMonth ?? 0), 0);
+  const churnPct =
+    totalActive + totalChurned > 0 ? (totalChurned / (totalActive + totalChurned)) * 100 : null;
+
+  // Operator-supplied metrics live under a single app_settings key.
+  const settings = data?.manual?.settings ?? {};
+  const cm = (settings.company_metrics ?? {}) as Record<string, number | undefined>;
+  const headcount = Number(cm.headcount ?? 0) || null;
+  const trustpilotReviews = cm.trustpilot_reviews != null ? Number(cm.trustpilot_reviews) : null;
+  const trustpilotScore = cm.trustpilot_score != null ? Number(cm.trustpilot_score) : null;
+  // Instagram: prefer the LIVE synced count (data.instagram.followers,
+  // refreshed via the sync button) over a manually-entered fallback.
+  const liveIg = data?.instagram?.followers != null ? Number(data.instagram.followers) : null;
+  const instagram = liveIg ?? (cm.instagram_followers != null ? Number(cm.instagram_followers) : null);
+  const igLive = liveIg != null;
+
+  const revPerEmployee =
+    inputs.ttmRevenue != null && headcount && headcount > 0 ? inputs.ttmRevenue / headcount : null;
+
+  const compact = (n: number | null | undefined, prefix = "") => {
+    if (n == null || !Number.isFinite(n)) return null;
+    const abs = Math.abs(n);
+    if (abs >= 1_000_000) return `${prefix}${(n / 1_000_000).toFixed(1)}M`;
+    if (abs >= 1_000) return `${prefix}${(n / 1000).toFixed(0)}k`;
+    return `${prefix}${Math.round(n)}`;
+  };
+
+  async function saveMetric(key: string, value: number) {
+    const next = { ...cm, [key]: value };
+    await setAppSetting({ data: { key: "company_metrics", value: next } });
+    onSaved();
+  }
+
+  return (
+    <div className="rounded-xl border bg-card shadow-sm p-5">
+      <div className="text-[12px] font-medium text-neutral-500 mb-4">Headline metrics</div>
+      <div className="flex flex-wrap items-start justify-center gap-x-6 gap-y-5 sm:justify-between">
+        <MetricCircle
+          icon={<DollarSign className="h-4 w-4" />}
+          accent="emerald"
+          label="Revenue (TTM)"
+          value={compact(inputs.ttmRevenue, "€")}
+        />
+        <MetricCircle
+          icon={<Repeat className="h-4 w-4" />}
+          accent="violet"
+          label="MRR"
+          value={compact(mrr, "€")}
+        />
+        <MetricCircle
+          icon={<TrendingUp className="h-4 w-4" />}
+          accent="blue"
+          label="EBITDA (TTM)"
+          value={compact(inputs.ttmEbitda, "€")}
+        />
+        <MetricCircle
+          icon={<UserMinus className="h-4 w-4" />}
+          accent="amber"
+          label="Churn / mo"
+          value={churnPct != null ? `${churnPct.toFixed(1)}%` : null}
+        />
+        <MetricCircle
+          icon={<Star className="h-4 w-4" />}
+          accent="green"
+          label={trustpilotScore != null ? `Trustpilot ${trustpilotScore.toFixed(1)}★` : "Trustpilot"}
+          value={trustpilotReviews != null ? compact(trustpilotReviews) : null}
+          editable
+          editLabel="Trustpilot reviews"
+          onSave={(v) => saveMetric("trustpilot_reviews", v)}
+          secondaryEditLabel="Score (0–5)"
+          onSaveSecondary={(v) => saveMetric("trustpilot_score", v)}
+        />
+        <MetricCircle
+          icon={<Users className="h-4 w-4" />}
+          accent="sky"
+          label="Rev / employee"
+          value={revPerEmployee != null ? compact(revPerEmployee, "€") : null}
+          hint={headcount ? `${headcount} staff` : "set headcount"}
+          editable
+          editLabel="Headcount"
+          onSave={(v) => saveMetric("headcount", v)}
+        />
+        <MetricCircle
+          icon={<InstagramGlyph className="h-4 w-4" />}
+          accent="pink"
+          label="Instagram"
+          value={instagram != null ? compact(instagram) : null}
+          hint={igLive ? "live · @zapply_" : "manual — sync on Sync page"}
+          editable={!igLive}
+          editLabel="Instagram followers"
+          onSave={(v) => saveMetric("instagram_followers", v)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MetricCircle({
+  icon,
+  accent,
+  label,
+  value,
+  hint,
+  editable,
+  editLabel,
+  onSave,
+  secondaryEditLabel,
+  onSaveSecondary,
+}: {
+  icon: React.ReactNode;
+  accent: "emerald" | "violet" | "blue" | "amber" | "green" | "sky" | "pink";
+  label: string;
+  value: string | null;
+  hint?: string;
+  editable?: boolean;
+  editLabel?: string;
+  onSave?: (v: number) => void | Promise<void>;
+  secondaryEditLabel?: string;
+  onSaveSecondary?: (v: number) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [draft2, setDraft2] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const ring: Record<string, string> = {
+    emerald: "ring-emerald-200 text-emerald-700 bg-emerald-50",
+    violet: "ring-violet-200 text-violet-700 bg-violet-50",
+    blue: "ring-blue-200 text-blue-700 bg-blue-50",
+    amber: "ring-amber-200 text-amber-700 bg-amber-50",
+    green: "ring-green-200 text-green-700 bg-green-50",
+    sky: "ring-sky-200 text-sky-700 bg-sky-50",
+    pink: "ring-pink-200 text-pink-700 bg-pink-50",
+  };
+
+  async function commit() {
+    setSaving(true);
+    try {
+      const n = parseFloat(draft.replace(/[^\d.-]/g, ""));
+      if (Number.isFinite(n) && onSave) await onSave(n);
+      if (secondaryEditLabel && onSaveSecondary && draft2.trim() !== "") {
+        const n2 = parseFloat(draft2.replace(/[^\d.-]/g, ""));
+        if (Number.isFinite(n2)) await onSaveSecondary(n2);
+      }
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex w-[88px] flex-col items-center text-center">
+      <button
+        type="button"
+        disabled={!editable}
+        onClick={() => editable && setEditing(true)}
+        className={`relative grid h-[68px] w-[68px] place-items-center rounded-full ring-2 ${ring[accent]} ${editable ? "cursor-pointer hover:brightness-95" : "cursor-default"}`}
+        title={editable ? `Click to set ${editLabel}` : undefined}
+      >
+        <div className="absolute top-2 opacity-70">{icon}</div>
+        <div className="mt-3 text-[14px] font-semibold tabular-nums leading-none">
+          {value ?? <span className="text-neutral-300">—</span>}
+        </div>
+        {editable && value == null && (
+          <Pencil className="absolute bottom-2 right-2 h-2.5 w-2.5 opacity-50" />
+        )}
+      </button>
+      <div className="mt-1.5 text-[10px] font-medium text-neutral-500 leading-tight">{label}</div>
+      {hint && <div className="text-[9px] text-neutral-400">{hint}</div>}
+
+      {editing && (
+        <div className="mt-2 w-[120px] rounded-md border border-neutral-200 bg-white p-2 shadow-lg">
+          <div className="text-[10px] font-medium text-neutral-500 mb-1">{editLabel}</div>
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && commit()}
+            placeholder="e.g. 1240"
+            className="w-full rounded border border-neutral-200 px-1.5 py-1 text-[11px] tabular-nums"
+          />
+          {secondaryEditLabel && (
+            <>
+              <div className="text-[10px] font-medium text-neutral-500 mb-1 mt-2">{secondaryEditLabel}</div>
+              <input
+                value={draft2}
+                onChange={(e) => setDraft2(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && commit()}
+                placeholder="e.g. 4.6"
+                className="w-full rounded border border-neutral-200 px-1.5 py-1 text-[11px] tabular-nums"
+              />
+            </>
+          )}
+          <div className="mt-2 flex gap-1">
+            <button
+              onClick={commit}
+              disabled={saving}
+              className="flex-1 rounded bg-neutral-900 px-2 py-1 text-[10px] font-medium text-white disabled:opacity-50"
+            >
+              {saving ? "…" : "Save"}
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              className="rounded border border-neutral-200 px-2 py-1 text-[10px] text-neutral-600"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -15,6 +15,7 @@ import { Route as StoreRouteImport } from './routes/store'
 import { Route as OverviewDashboardRouteImport } from './routes/overview-dashboard'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as InvoicesRouteImport } from './routes/invoices'
+import { Route as Ig_zapplyRouteImport } from './routes/ig_zapply'
 import { Route as AccountingRouteImport } from './routes/accounting'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PillarsValuationRouteImport } from './routes/pillars.valuation'
@@ -30,6 +31,7 @@ import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as ApiSyncLoopRouteImport } from './routes/api.sync-loop'
 import { Route as ApiSyncRouteImport } from './routes/api.sync'
 import { Route as ApiJorttRouteImport } from './routes/api.jortt'
+import { Route as ApiIgDebugRouteImport } from './routes/api.ig-debug'
 import { Route as ApiShopifyInstallRouteImport } from './routes/api.shopify.install'
 import { Route as ApiShopifyCallbackRouteImport } from './routes/api.shopify.callback'
 import { Route as ApiPublicSyncRouteImport } from './routes/api.public.sync'
@@ -69,6 +71,11 @@ const LoginRoute = LoginRouteImport.update({
 const InvoicesRoute = InvoicesRouteImport.update({
   id: '/invoices',
   path: '/invoices',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Ig_zapplyRoute = Ig_zapplyRouteImport.update({
+  id: '/ig_zapply',
+  path: '/ig_zapply',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AccountingRoute = AccountingRouteImport.update({
@@ -147,6 +154,11 @@ const ApiJorttRoute = ApiJorttRouteImport.update({
   path: '/api/jortt',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiIgDebugRoute = ApiIgDebugRouteImport.update({
+  id: '/api/ig-debug',
+  path: '/api/ig-debug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiShopifyInstallRoute = ApiShopifyInstallRouteImport.update({
   id: '/api/shopify/install',
   path: '/api/shopify/install',
@@ -201,12 +213,14 @@ const ApiAuthXeroCallbackRoute = ApiAuthXeroCallbackRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/accounting': typeof AccountingRoute
+  '/ig_zapply': typeof Ig_zapplyRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
   '/overview-dashboard': typeof OverviewDashboardRoute
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/api/ig-debug': typeof ApiIgDebugRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
@@ -234,12 +248,14 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/accounting': typeof AccountingRoute
+  '/ig_zapply': typeof Ig_zapplyRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
   '/overview-dashboard': typeof OverviewDashboardRoute
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/api/ig-debug': typeof ApiIgDebugRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
@@ -268,12 +284,14 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/accounting': typeof AccountingRoute
+  '/ig_zapply': typeof Ig_zapplyRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
   '/overview-dashboard': typeof OverviewDashboardRoute
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/api/ig-debug': typeof ApiIgDebugRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
@@ -303,12 +321,14 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/accounting'
+    | '/ig_zapply'
     | '/invoices'
     | '/login'
     | '/overview-dashboard'
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/api/ig-debug'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
@@ -336,12 +356,14 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/accounting'
+    | '/ig_zapply'
     | '/invoices'
     | '/login'
     | '/overview-dashboard'
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/api/ig-debug'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
@@ -369,12 +391,14 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/accounting'
+    | '/ig_zapply'
     | '/invoices'
     | '/login'
     | '/overview-dashboard'
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/api/ig-debug'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
@@ -403,12 +427,14 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AccountingRoute: typeof AccountingRoute
+  Ig_zapplyRoute: typeof Ig_zapplyRoute
   InvoicesRoute: typeof InvoicesRoute
   LoginRoute: typeof LoginRoute
   OverviewDashboardRoute: typeof OverviewDashboardRoute
   StoreRoute: typeof StoreRoute
   SubscriptionsRoute: typeof SubscriptionsRoute
   TripleWhaleRoute: typeof TripleWhaleRoute
+  ApiIgDebugRoute: typeof ApiIgDebugRoute
   ApiJorttRoute: typeof ApiJorttRouteWithChildren
   ApiSyncRoute: typeof ApiSyncRoute
   ApiSyncLoopRoute: typeof ApiSyncLoopRoute
@@ -473,6 +499,13 @@ declare module '@tanstack/react-router' {
       path: '/invoices'
       fullPath: '/invoices'
       preLoaderRoute: typeof InvoicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ig_zapply': {
+      id: '/ig_zapply'
+      path: '/ig_zapply'
+      fullPath: '/ig_zapply'
+      preLoaderRoute: typeof Ig_zapplyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/accounting': {
@@ -580,6 +613,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiJorttRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/ig-debug': {
+      id: '/api/ig-debug'
+      path: '/api/ig-debug'
+      fullPath: '/api/ig-debug'
+      preLoaderRoute: typeof ApiIgDebugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/shopify/install': {
       id: '/api/shopify/install'
       path: '/api/shopify/install'
@@ -682,12 +722,14 @@ const ApiAuthXeroRouteWithChildren = ApiAuthXeroRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountingRoute: AccountingRoute,
+  Ig_zapplyRoute: Ig_zapplyRoute,
   InvoicesRoute: InvoicesRoute,
   LoginRoute: LoginRoute,
   OverviewDashboardRoute: OverviewDashboardRoute,
   StoreRoute: StoreRoute,
   SubscriptionsRoute: SubscriptionsRoute,
   TripleWhaleRoute: TripleWhaleRoute,
+  ApiIgDebugRoute: ApiIgDebugRoute,
   ApiJorttRoute: ApiJorttRouteWithChildren,
   ApiSyncRoute: ApiSyncRoute,
   ApiSyncLoopRoute: ApiSyncLoopRoute,

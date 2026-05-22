@@ -6,6 +6,7 @@ import { useDashboardSession } from "@/components/dashboard/useDashboardSession"
 import { getDashboardData } from "@/server/dashboard.functions";
 import { getManualDataSnapshot } from "@/server/manual-data.functions";
 import { MarketsView } from "@/components/FinanceDashboard.tsx";
+import { Users, Target, Package, Truck, Building2, Gauge, TrendingUp, TrendingDown } from "lucide-react";
 
 export const Route = createFileRoute("/pillars/margin-per-market")({
   head: () => ({ meta: [{ title: "Margin per Market — Zapply" }] }),
@@ -160,10 +161,37 @@ function pct(n: number | null | undefined) {
 }
 
 const MARKET_NAMES: Record<string, string> = {
-  NL: "🇳🇱 Netherlands",
-  UK: "🇬🇧 United Kingdom",
-  US: "🇺🇸 United States",
+  NL: "Netherlands",
+  UK: "United Kingdom",
+  US: "United States",
 };
+
+// Real flag images (flagcdn) instead of emoji — Windows has no flag emoji
+// glyphs and renders 🇳🇱 as the letters "NL", which is what the cards were
+// showing. Images render identically on every OS.
+function Flag({ code, size = 20 }: { code: string; size?: number }) {
+  const cc = code === "UK" ? "gb" : code.toLowerCase();
+  return (
+    <img
+      src={`https://flagcdn.com/${size * 2}x${Math.round(size * 1.5)}/${cc}.png`}
+      width={size}
+      height={Math.round(size * 0.75)}
+      alt={code}
+      loading="lazy"
+      className="inline-block rounded-[3px] shadow-sm ring-1 ring-black/5 align-[-2px]"
+    />
+  );
+}
+
+// Market label = flag image + country name, used in both cards.
+function MarketLabel({ code, className = "" }: { code: string; className?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-2 ${className}`}>
+      <Flag code={code} size={18} />
+      <span>{MARKET_NAMES[code] ?? code}</span>
+    </span>
+  );
+}
 
 function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
   if (!econ || !Array.isArray(econ.markets) || econ.markets.length === 0) {
@@ -179,12 +207,17 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
     <>
       {/* ── Retention / LTV ── */}
       <div className="rounded-xl border bg-white shadow-sm p-5">
-        <div className="flex items-start justify-between flex-wrap gap-2">
-          <div>
-            <div className="text-[14px] font-semibold">Customer LTV by horizon</div>
-            <div className="mt-0.5 text-[12px] text-neutral-500">
-              True cohort LTV — average revenue within N days of each customer's first order ·
-              source: Shopify orders mirror
+        <div class‌Name="flex items-start justify-between flex-wrap gap-2">
+          <div className="flex items-start gap-2.5">
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-violet-100">
+              <Users className="h-4 w-4 text-violet-700" />
+            </div>
+            <div>
+              <div className="text-[14px] font-semibold">Customer LTV by horizon</div>
+              <div className="mt-0.5 text-[12px] text-neutral-500">
+                True cohort LTV — average revenue within N days of each customer's first order ·
+                source: Shopify orders mirror
+              </div>
             </div>
           </div>
           <span className="rounded-md bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">
@@ -216,7 +249,7 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
                   );
                 return (
                   <tr key={m.market} className="border-t border-neutral-100">
-                    <td className="px-3 py-2 font-medium">{MARKET_NAMES[m.market] ?? m.market}</td>
+                    <td className="px-3 py-2 font-medium"><MarketLabel code={m.market} /></td>
                     <td className="px-3 py-2 text-right">{ltvCell(m.ltv60, m.matureCustomers60)}</td>
                     <td className="px-3 py-2 text-right">{ltvCell(m.ltv90, m.matureCustomers90)}</td>
                     <td className="px-3 py-2 text-right">{ltvCell(m.ltv180, m.matureCustomers180)}</td>
@@ -255,10 +288,15 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
       {/* ── Unit economics / break-even ROAS ── */}
       <div className="rounded-xl border bg-white shadow-sm p-5">
         <div className="flex items-start justify-between flex-wrap gap-2">
-          <div>
-            <div className="text-[14px] font-semibold">Unit economics &amp; break-even ROAS</div>
-            <div className="mt-0.5 text-[12px] text-neutral-500">
-              The marketing efficiency needed to break even at three cost levels · per market
+          <div className="flex items-start gap-2.5">
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-100">
+              <Target className="h-4 w-4 text-blue-700" />
+            </div>
+            <div>
+              <div className="text-[14px] font-semibold">Unit economics &amp; break-even ROAS</div>
+              <div className="mt-0.5 text-[12px] text-neutral-500">
+                The marketing efficiency needed to break even at three cost levels · per market
+              </div>
             </div>
           </div>
         </div>
@@ -271,15 +309,21 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
             const maxCac = (roas: number | null) =>
               roas != null && roas > 0 && aovForCac > 0 ? aovForCac / roas : null;
             const beRow = (
+              icon: React.ReactNode,
               label: string,
               value: number | null,
               hint: string,
               tone: string,
             ) => (
               <div className="flex items-center justify-between gap-2 border-t border-neutral-100 py-2 first:border-t-0">
-                <div className="min-w-0">
-                  <div className="text-[12px] font-medium text-neutral-700">{label}</div>
-                  <div className="text-[10px] text-neutral-400">{hint}</div>
+                <div className="flex items-start gap-2 min-w-0">
+                  <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded bg-neutral-100 text-neutral-500">
+                    {icon}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-[12px] font-medium text-neutral-700">{label}</div>
+                    <div className="text-[10px] text-neutral-400">{hint}</div>
+                  </div>
                 </div>
                 <div className="text-right shrink-0">
                   <div className={`text-[16px] font-semibold tabular-nums ${tone}`}>{x2(value)}</div>
@@ -298,7 +342,7 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
             return (
               <div key={m.market} className="rounded-lg border border-neutral-200 p-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-[13px] font-semibold">{MARKET_NAMES[m.market] ?? m.market}</div>
+                  <div className="text-[13px] font-semibold"><MarketLabel code={m.market} /></div>
                   <div className="text-[10px] text-neutral-400">
                     AOV {eur(m.aov, m.currency)} · CAC {eur(m.cac, m.currency)}
                   </div>
@@ -316,18 +360,21 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
                   return (
                     <div className="mt-2">
                       {beRow(
+                        <Package className="h-3 w-3" />,
                         "Product margin",
                         m.breakEvenRoasProduct,
                         `COGS ${cogsAmt} (${pct(m.cogsPct)})`,
                         "text-neutral-900",
                       )}
                       {beRow(
+                        <Truck className="h-3 w-3" />,
                         "Incl. delivery",
                         m.breakEvenRoasDelivery,
                         `+ ship ${shipAmt} · fees ${feeAmt} · fulfil ${fulfilAmt} /order`,
                         "text-neutral-900",
                       )}
                       {beRow(
+                        <Building2 className="h-3 w-3" />,
                         "Incl. fixed OpEx",
                         m.breakEvenRoasOpex,
                         `+ OpEx ${eur(m.opexPerOrder, m.currency)}/order`,
@@ -336,18 +383,35 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
                     </div>
                   );
                 })()}
-                <div className="mt-3 rounded-md bg-neutral-50 px-3 py-2">
+                <div
+                  className={`mt-3 rounded-md px-3 py-2 ${
+                    headroom == null
+                      ? "bg-neutral-50"
+                      : headroom >= 0
+                        ? "bg-emerald-50/60"
+                        : "bg-rose-50/60"
+                  }`}
+                >
                   <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-neutral-500">Current blended ROAS</span>
+                    <span className="inline-flex items-center gap-1.5 text-neutral-500">
+                      <Gauge className="h-3.5 w-3.5" /> Current blended ROAS
+                    </span>
                     <span className="font-semibold tabular-nums">{x2(m.blendedRoas)}</span>
                   </div>
                   {headroom != null && (
                     <div
-                      className={`mt-1 text-[11px] font-medium ${headroom >= 0 ? "text-emerald-700" : "text-rose-600"}`}
+                      className={`mt-1 flex items-start gap-1 text-[11px] font-medium ${headroom >= 0 ? "text-emerald-700" : "text-rose-600"}`}
                     >
-                      {headroom >= 0
-                        ? `${x2(headroom)} above full break-even — room to lower targets & scale`
-                        : `${x2(Math.abs(headroom))} below full break-even — tighten targets`}
+                      {headroom >= 0 ? (
+                        <TrendingUp className="h-3.5 w-3.5 mt-px shrink-0" />
+                      ) : (
+                        <TrendingDown className="h-3.5 w-3.5 mt-px shrink-0" />
+                      )}
+                      <span>
+                        {headroom >= 0
+                          ? `${x2(headroom)} above full break-even — room to lower targets & scale`
+                          : `${x2(Math.abs(headroom))} below full break-even — tighten targets`}
+                      </span>
                     </div>
                   )}
                 </div>
