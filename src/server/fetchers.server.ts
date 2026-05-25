@@ -2210,8 +2210,13 @@ function getStoredXeroRefreshToken(row: any) {
   return row?.refresh_token ?? row?.metadata?.refresh_token ?? null;
 }
 
+// Wait up to ~30s (matching claim_xero_refresh TTL) for the lock holder to
+// write the rotated token. 2s of polling — the previous value — wasn't
+// enough: a token-endpoint round-trip + Supabase write commonly takes 3-5s,
+// so waiters timed out and the caller fell through to refresh in parallel,
+// which is the reuse pattern Xero punishes by revoking the whole family.
 async function useNewerXeroTokenIfAvailable(attemptedRefreshToken: string) {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 30; attempt++) {
     const latest = await readXeroTokenRow();
     const latestRefreshToken = getStoredXeroRefreshToken(latest);
     if (
@@ -2223,7 +2228,7 @@ async function useNewerXeroTokenIfAvailable(attemptedRefreshToken: string) {
       console.warn("Xero refresh token was already rotated by another request; using the latest stored access token.");
       return latest.access_token as string;
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return null;
 }
@@ -2293,14 +2298,35 @@ async function getXeroToken(): Promise<string | null> {
     ownsRefreshLock = true;
   }
   if (!ownsRefreshLock) {
-    // Another instance is refreshing. Poll for the token it saves.
+    // Another instance is refreshing. Wait for the token it saves.
     const fresh = await useNewerXeroTokenIfAvailable(refreshToken);
     if (fresh) return fresh;
-    // Lock holder hasn't saved yet (or died). Re-read once more; if still
-    // stale, fall through and attempt our own refresh as a last resort.
-    const latest = await readXeroTokenRow();
-    if (latest?.access_token && xeroTokenValidUntil(latest)) return latest.access_token;
+    // Fail closed instead of racing the lock holder. Calling Xero with the
+    // same refresh_token from two instances is exactly the reuse pattern
+    // that revokes the entire token family and forces a re-OAuth. Better
+    // for this one request to surface "Xero busy" than to nuke the family.
+    __xeroLastTokenError =
+      "Xero refresh in progress on another instance and did not complete within the lock window — try again in a moment";
+    console.warn("[xero] gave up waiting for lock holder; not racing the refresh.");
+    return null;
   }
+
+  // Release the refresh lock without rotating the access_token — used on any
+  // refresh failure so the lock doesn't sit set for the full TTL window
+  // blocking subsequent retries.
+  const releaseRefreshLock = async () => {
+    try {
+      await serviceClient()
+        .from("integrations")
+        .update({
+          metadata: { ...row.metadata, refresh_lock_at: null },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("provider", "xero");
+    } catch (e: any) {
+      console.warn("[xero] failed to release refresh lock:", e?.message ?? e);
+    }
+  };
 
   const refreshPromise = (async () => {
     try {
@@ -2329,6 +2355,7 @@ async function getXeroToken(): Promise<string | null> {
         }
         __xeroLastTokenError = `Token refresh failed (HTTP ${res.status}): ${body}`;
         console.error("Xero token refresh failed:", res.status, body);
+        await releaseRefreshLock();
         return null;
       }
 
@@ -2336,6 +2363,7 @@ async function getXeroToken(): Promise<string | null> {
       const finalRefresh = rotated ?? new_refresh ?? refreshToken;
       if (!access_token) {
         __xeroLastTokenError = "Token refresh returned no access_token";
+        await releaseRefreshLock();
         return null;
       }
       if (!rotated && !new_refresh) {
@@ -2367,12 +2395,14 @@ async function getXeroToken(): Promise<string | null> {
       if (updateError) {
         __xeroLastTokenError = `Token refreshed, but saving the rotated token failed: ${updateError.message}`;
         console.error("Xero token save failed:", updateError.message);
+        await releaseRefreshLock();
         return null;
       }
       return access_token;
     } catch (err: any) {
       __xeroLastTokenError = `Token refresh exception: ${err?.message ?? String(err)}`;
       console.error("Xero token refresh error:", err.message);
+      await releaseRefreshLock();
       return null;
     }
   })();
