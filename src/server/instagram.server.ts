@@ -37,6 +37,12 @@ const DEFAULT_IG_UA =
 const DEFAULT_IG_COOKIE =
   "csrftoken=ucYwY6zILQAWKQlgP4EED0nHSoktnzy0; mid=ag_-MAABAAH2-XQwWkvP187AbTh0";
 
+// Proxy service that returns the same data.user.* shape as Instagram's
+// web_profile_info. Hard-capped at 5 requests/day, so call sites MUST
+// gate with the dashboard cache (see INSTAGRAM_CACHE_MIN_MINUTES in
+// dashboard.functions.ts) — the proxy itself does no caching.
+const DEFAULT_PROXY_URL = "https://insta-exe.leapcell.app/proxy";
+
 function username(): string {
   return (process.env.INSTAGRAM_USERNAME || DEFAULT_USERNAME).replace(/^@/, "").trim();
 }
@@ -138,12 +144,52 @@ async function fetchViaCurl(url: string, ua: string): Promise<any> {
   return u;
 }
 
+// Primary path: the leapcell proxy service. Returns the same JSON shape as
+// Instagram's web_profile_info (data.user.*) but is reachable from
+// datacenter IPs (Vercel) where the direct call is hard-blocked. The
+// service rate-limits to 5 req/day per IP — callers MUST cache.
+async function fetchViaProxy(): Promise<any> {
+  const user = username();
+  const base = (process.env.INSTAGRAM_PROXY_API_URL || DEFAULT_PROXY_URL).replace(/\?+$/, "");
+  const url = `${base}?username=${encodeURIComponent(user)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store", headers: { Accept: "application/json" } });
+  } catch (err: any) {
+    throw new Error(`proxy fetch failed: ${err?.message ?? String(err)}`);
+  }
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 160);
+    throw new Error(`proxy HTTP ${res.status}${body ? `: ${body}` : ""}`);
+  }
+  let json: any;
+  try {
+    json = await res.json();
+  } catch {
+    throw new Error("proxy returned non-JSON body");
+  }
+  const u = json?.data?.user;
+  if (!u) throw new Error("proxy JSON had no data.user (rate-limited or upstream error)");
+  return u;
+}
+
 async function fetchRaw(): Promise<any> {
   const user = username();
   const ua = process.env.INSTAGRAM_USER_AGENT || DEFAULT_IG_UA;
   const url = `https://i.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(user)}`;
 
-  // 1. Primary: system curl (the request that returns 200 in every tester;
+  // 1. Primary: the leapcell proxy. Reachable from Vercel datacenter IPs
+  // where Instagram's direct endpoint is blocked. Rate-limited (5/day),
+  // hence the cache guard in dashboard.functions.ts.
+  let proxyError: string | null = null;
+  try {
+    return await fetchViaProxy();
+  } catch (err: any) {
+    proxyError = err?.message ?? String(err);
+    console.warn("[instagram] proxy path:", proxyError);
+  }
+
+  // 2. Fallback: system curl (the request that returns 200 in every tester;
   // curl's TLS fingerprint is accepted where Node's undici is blocked).
   let curlError: string | null = null;
   try {
@@ -153,7 +199,7 @@ async function fetchRaw(): Promise<any> {
     console.warn("[instagram] curl path:", curlError);
   }
 
-  // 2. Fallback: undici fetch (for hosts without curl). No manual
+  // 3. Fallback: undici fetch (for hosts without curl). No manual
   // Accept-Encoding (it breaks res.json() under undici).
   const dispatcher = await buildDispatcher();
   let res: Response;
@@ -164,20 +210,24 @@ async function fetchRaw(): Promise<any> {
       ...(dispatcher ? { dispatcher } : {}),
     } as any);
   } catch (err: any) {
-    throw new Error(`Both paths failed — curl: [${curlError}]; fetch: [${err?.message ?? err}]`);
+    throw new Error(
+      `All paths failed — proxy: [${proxyError}]; curl: [${curlError}]; fetch: [${err?.message ?? err}]`
+    );
   }
   if (!res.ok) {
     const body = (await res.text().catch(() => "")).slice(0, 120);
-    throw new Error(`curl: [${curlError}]; fetch HTTP ${res.status}${body ? `: ${body}` : ""}`);
+    throw new Error(
+      `proxy: [${proxyError}]; curl: [${curlError}]; fetch HTTP ${res.status}${body ? `: ${body}` : ""}`
+    );
   }
   let json: any;
   try {
     json = await res.json();
   } catch {
-    throw new Error(`curl: [${curlError}]; fetch returned non-JSON body`);
+    throw new Error(`proxy: [${proxyError}]; curl: [${curlError}]; fetch returned non-JSON body`);
   }
   const u = json?.data?.user;
-  if (!u) throw new Error(`curl: [${curlError}]; fetch JSON had no data.user`);
+  if (!u) throw new Error(`proxy: [${proxyError}]; curl: [${curlError}]; fetch JSON had no data.user`);
   return u;
 }
 

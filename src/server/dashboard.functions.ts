@@ -459,13 +459,33 @@ export const triggerPicqerSyncNow = createServerFn({ method: "POST" }).middlewar
   }
 });
 
-// Instagram follower sync — Graph API with public-endpoint fallback.
+// The upstream Instagram proxy (insta-exe.leapcell.app) is hard-capped at
+// 5 requests/day per IP. 6h between live fetches → max 4/day with headroom
+// for one manual refresh. Override with INSTAGRAM_CACHE_MIN_MINUTES.
+const INSTAGRAM_CACHE_MIN_MINUTES =
+  Number(process.env.INSTAGRAM_CACHE_MIN_MINUTES) > 0
+    ? Number(process.env.INSTAGRAM_CACHE_MIN_MINUTES)
+    : 6 * 60;
+
+// Instagram follower sync — proxied endpoint with public-endpoint fallback.
 // Writes to data_cache (instagram/followers) so the Valuation page reads
-// the live count without re-fetching on every render.
+// the live count without re-fetching on every render. Skips the live call
+// when the cached entry is younger than INSTAGRAM_CACHE_MIN_MINUTES so we
+// stay under the proxy's 5-req/day limit even if this is called repeatedly.
 export const triggerInstagramSync = createServerFn({ method: "POST" }).middleware([requireAllowedUser]).handler(async () => {
+  const cached = await readCache("instagram", "followers");
+  if (cached?.payload && ageMinutes(cached.fetchedAt) < INSTAGRAM_CACHE_MIN_MINUTES) {
+    return { ...(cached.payload as any), cached: true, fetchedAt: cached.fetchedAt };
+  }
   const { fetchInstagramFollowers } = await import("./instagram.server");
   const result = await fetchInstagramFollowers();
-  await writeCache("instagram", "followers", result);
+  if (result && result.followers != null) {
+    await writeCache("instagram", "followers", result);
+    return result;
+  }
+  if (cached?.payload) {
+    return { ...(cached.payload as any), stale: true, liveError: result?.error ?? null };
+  }
   return result;
 });
 
@@ -475,20 +495,37 @@ export const getInstagramFollowers = createServerFn({ method: "GET" }).middlewar
 });
 
 // Full Instagram profile (bio, stats, recent posts) for the standalone
-// /ig_zapply page. Fetches live, caches, and falls back to the last cached
-// payload if the live pull is blocked (429 from datacenter IPs).
+// /ig_zapply page. Returns cached payload when it's younger than the
+// daily-cache window (protects the 5 req/day proxy quota). Only when the
+// cache is stale do we hit the upstream — and if that fails, fall back to
+// the last cached payload so the UI stays useful.
 export const getInstagramProfile = createServerFn({ method: "GET" }).middleware([requireAllowedUser]).handler(async () => {
   // Bulletproof: never throw — always return a profile-shaped object so the
   // page can render the real error instead of a null (which the UI was
   // mislabelling as a generic "rate-limited").
   try {
+    const cached = await readCache("instagram", "profile");
+    const cacheAge = ageMinutes(cached?.fetchedAt);
+    if (cached?.payload && cacheAge < INSTAGRAM_CACHE_MIN_MINUTES) {
+      return { ...(cached.payload as any), cached: true, cacheAgeMinutes: Math.round(cacheAge) };
+    }
     const { fetchInstagramProfile } = await import("./instagram.server");
     const live = await fetchInstagramProfile();
     if (live && live.followers != null) {
       await writeCache("instagram", "profile", live);
+      // Mirror the followers/following/posts slice into the followers cache
+      // so getInstagramFollowers / the Valuation card stay in sync without a
+      // second upstream call.
+      await writeCache("instagram", "followers", {
+        username: live.username,
+        followers: live.followers,
+        following: live.following,
+        posts: live.postsCount,
+        source: "public",
+        fetchedAt: live.fetchedAt,
+      });
       return live;
     }
-    const cached = await readCache("instagram", "profile");
     if (cached?.payload) {
       return { ...(cached.payload as any), stale: true, liveError: live?.error ?? null };
     }

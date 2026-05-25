@@ -75,7 +75,7 @@ function IgZapplyPage() {
                 <div className="rounded-full bg-white p-1">
                   {profile?.profilePic ? (
                     <img
-                      src={profile.profilePic}
+                      src={`/api/ig-image?url=${encodeURIComponent(profile.profilePic)}`}
                       alt={profile.username}
                       referrerPolicy="no-referrer"
                       className="h-24 w-24 rounded-full object-cover"
@@ -223,7 +223,7 @@ function IgZapplyPage() {
                 >
                   {p.thumbnail ? (
                     <img
-                      src={p.thumbnail}
+                      src={`/api/ig-image?url=${encodeURIComponent(p.thumbnail)}`}
                       alt=""
                       referrerPolicy="no-referrer"
                       loading="lazy"

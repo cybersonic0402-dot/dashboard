@@ -2,11 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData } from "@/server/dashboard.functions";
+import { getDashboardData, getInstagramProfile } from "@/server/dashboard.functions";
 import { setAppSetting } from "@/server/manual-data.functions";
 import {
   Briefcase, TrendingUp, Wallet, Building2, Info, Sliders,
   DollarSign, Repeat, UserMinus, Star, Users, Pencil,
+  BadgeCheck, Heart, MessageCircle, Eye, Play, ExternalLink,
 } from "lucide-react";
 
 // Inline Instagram glyph — lucide-react 1.9.0 doesn't export an Instagram
@@ -502,6 +503,7 @@ function ValuationPage() {
   const { user } = useDashboardSession();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [igProfile, setIgProfile] = useState<any>(null);
 
   const [revMult, setRevMult] = useState(2.5);
   const [ebitdaMult, setEbitdaMult] = useState(6);
@@ -512,6 +514,12 @@ function ValuationPage() {
     getDashboardData()
       .then((d) => alive && setData(d))
       .finally(() => alive && setLoading(false));
+    // Load Instagram profile separately — getInstagramProfile is cache-gated
+    // server-side (6h window) so this stays well under the 5 req/day proxy
+    // cap even if the user navigates here repeatedly.
+    getInstagramProfile()
+      .then((p) => alive && setIgProfile(p))
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -794,6 +802,9 @@ function ValuationPage() {
             </table>
           </div>
 
+          {/* Instagram analytics */}
+          <InstagramAnalytics profile={igProfile} />
+
           {/* Comparables footer */}
           <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-[12px] text-neutral-600 flex items-start gap-2">
             <Info className="h-4 w-4 text-neutral-400 mt-0.5 shrink-0" />
@@ -807,6 +818,250 @@ function ValuationPage() {
         </div>
       </div>
     </DashboardShell>
+  );
+}
+
+// ─── INSTAGRAM ANALYTICS ───────────────────────────────────────────────────
+// Compact analytics block fed by the /ig_zapply profile endpoint: profile
+// header, follower/following/posts stats, engagement metrics, and the four
+// most-engaging recent posts. Skips itself when the upstream fetch failed
+// and there's no cached payload to render.
+function InstagramAnalytics({ profile }: { profile: any }) {
+  if (!profile) {
+    return (
+      <div className="rounded-xl border bg-card shadow-sm p-5">
+        <SectionHeading
+          icon={<InstagramGlyph className="h-4 w-4 text-pink-600" />}
+          title="Instagram analytics"
+          subtitle="@zapply_ · loading…"
+        />
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <SkeletonBox className="h-16" />
+          <SkeletonBox className="h-16" />
+          <SkeletonBox className="h-16" />
+        </div>
+      </div>
+    );
+  }
+
+  const blocked = profile?.followers == null;
+  const topPosts: any[] = Array.isArray(profile?.posts)
+    ? [...profile.posts]
+        .filter((p) => (p?.likes ?? 0) > 0 || (p?.comments ?? 0) > 0)
+        .sort((a, b) => (b?.likes ?? 0) + (b?.comments ?? 0) - ((a?.likes ?? 0) + (a?.comments ?? 0)))
+        .slice(0, 4)
+    : [];
+
+  const fmtCompact = (n: number | null | undefined) => {
+    if (n == null || !Number.isFinite(n)) return DASH;
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+    return n.toLocaleString();
+  };
+
+  // Route IG CDN URLs through our server-side proxy. Browsers can't load
+  // *.cdninstagram.com / *.fbcdn.net images directly (referer-locked + signed
+  // URL expiry), so /api/ig-image fetches them with the right headers.
+  const proxyImg = (url: string | null | undefined): string | undefined =>
+    url ? `/api/ig-image?url=${encodeURIComponent(url)}` : undefined;
+
+  return (
+    <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
+      {/* Profile header */}
+      <div className="flex items-start gap-4 p-5 border-b border-neutral-100">
+        <div
+          className="shrink-0 rounded-full p-0.5"
+          style={{
+            background:
+              "linear-gradient(45deg,#f09433 0%,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888 100%)",
+          }}
+        >
+          <div className="rounded-full bg-white p-0.5">
+            {profile?.profilePic ? (
+              <img
+                src={proxyImg(profile.profilePic)}
+                alt={profile.username}
+                referrerPolicy="no-referrer"
+                className="h-14 w-14 rounded-full object-cover"
+              />
+            ) : (
+              <div className="grid h-14 w-14 place-items-center rounded-full bg-neutral-100 text-lg font-bold text-neutral-400">
+                {(profile?.username ?? "z")[0]?.toUpperCase()}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <div className="text-[15px] font-semibold text-neutral-900 truncate">
+              {profile?.fullName ?? profile?.username ?? "@zapply_"}
+            </div>
+            {profile?.isVerified && (
+              <BadgeCheck className="h-4 w-4 text-sky-500" fill="currentColor" stroke="white" />
+            )}
+          </div>
+          <a
+            href={`https://www.instagram.com/${profile?.username ?? "zapply_"}/`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[12px] font-medium text-neutral-500 hover:text-neutral-700 inline-flex items-center gap-1"
+          >
+            @{profile?.username ?? "zapply_"} <ExternalLink className="h-3 w-3" />
+          </a>
+          {profile?.category && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-600">
+                {profile.category}
+              </span>
+              {profile?.isBusiness && (
+                <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                  Business
+                </span>
+              )}
+              {profile?.cached && (
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                  Cached
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[10px] uppercase tracking-wider text-neutral-400">Synced</div>
+          <div className="text-[11px] font-medium text-neutral-600">
+            {profile?.fetchedAt ? new Date(profile.fetchedAt).toLocaleString("en-GB") : DASH}
+          </div>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-3 lg:grid-cols-6">
+        <IgStat label="Followers" value={fmtCompact(profile?.followers)} accent="violet" />
+        <IgStat label="Following" value={fmtCompact(profile?.following)} />
+        <IgStat label="Posts" value={fmtCompact(profile?.postsCount)} />
+        <IgStat
+          label="Avg likes"
+          value={fmtCompact(profile?.avgLikes)}
+          icon={<Heart className="h-3.5 w-3.5 text-rose-500" />}
+        />
+        <IgStat
+          label="Avg comments"
+          value={fmtCompact(profile?.avgComments)}
+          icon={<MessageCircle className="h-3.5 w-3.5 text-sky-500" />}
+        />
+        <IgStat
+          label="Engagement"
+          value={
+            profile?.engagementRate != null && Number.isFinite(profile.engagementRate)
+              ? `${profile.engagementRate.toFixed(2)}%`
+              : DASH
+          }
+          icon={<TrendingUp className="h-3.5 w-3.5 text-emerald-500" />}
+          accent="emerald"
+        />
+      </div>
+
+      {/* Top posts */}
+      {topPosts.length > 0 && (
+        <div className="border-t border-neutral-100 p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-[12px] font-semibold text-neutral-700">Top-engaging posts</div>
+            <div className="text-[10px] text-neutral-400">Ranked by likes + comments</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {topPosts.map((p) => (
+              <a
+                key={p.id}
+                href={p.url ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="group rounded-lg border border-neutral-100 overflow-hidden bg-neutral-50 hover:border-neutral-200 transition"
+              >
+                <div className="relative aspect-square">
+                  {p.thumbnail ? (
+                    <img
+                      src={proxyImg(p.thumbnail)}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      loading="lazy"
+                      className="h-full w-full object-cover transition group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-neutral-200" />
+                  )}
+                  {p.isVideo && (
+                    <div className="absolute right-1.5 top-1.5 rounded-full bg-black/50 p-1">
+                      <Play className="h-2.5 w-2.5 text-white" fill="white" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 px-2 py-1.5 text-[11px] font-medium text-neutral-600">
+                  <span className="inline-flex items-center gap-1">
+                    <Heart className="h-3 w-3 text-rose-500" /> {fmtCompact(p.likes)}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <MessageCircle className="h-3 w-3 text-sky-500" /> {fmtCompact(p.comments)}
+                  </span>
+                  {p.views != null && (
+                    <span className="ml-auto inline-flex items-center gap-1 text-neutral-500">
+                      <Eye className="h-3 w-3" /> {fmtCompact(p.views)}
+                    </span>
+                  )}
+                </div>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stale / blocked notice */}
+      {(blocked || profile?.stale) && (
+        <div className="border-t border-neutral-100 bg-amber-50/60 px-5 py-3 text-[12px] text-amber-800 flex items-start gap-2">
+          <Info className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div>
+            {blocked
+              ? `Live fetch unavailable: ${profile?.error ?? profile?.liveError ?? "rate-limited"}. The proxy is capped at 5 requests/day — try again later.`
+              : "Showing the last cached snapshot — live refresh was blocked."}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionHeading({
+  icon, title, subtitle,
+}: { icon: React.ReactNode; title: string; subtitle?: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="grid h-8 w-8 place-items-center rounded-md bg-pink-50">{icon}</div>
+      <div>
+        <div className="text-[13px] font-semibold">{title}</div>
+        {subtitle && <div className="mt-0.5 text-[12px] text-neutral-500">{subtitle}</div>}
+      </div>
+    </div>
+  );
+}
+
+function IgStat({
+  label, value, icon, accent,
+}: { label: string; value: string; icon?: React.ReactNode; accent?: "violet" | "emerald" }) {
+  const valueClass =
+    accent === "violet"
+      ? "text-violet-700"
+      : accent === "emerald"
+      ? "text-emerald-700"
+      : "text-neutral-900";
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-neutral-400">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div className={`mt-1 text-[20px] font-semibold tabular-nums leading-none ${valueClass}`}>
+        {value}
+      </div>
+    </div>
   );
 }
 
@@ -921,10 +1176,8 @@ function MetricCircles({
           accent="pink"
           label="Instagram"
           value={instagram != null ? compact(instagram) : null}
-          hint={igLive ? "live · @zapply_" : "manual — sync on Sync page"}
-          editable={!igLive}
-          editLabel="Instagram followers"
-          onSave={(v) => saveMetric("instagram_followers", v)}
+          hint={igLive ? "live · @zapply_" : "sync on Sync page"}
+          editable={false}
         />
       </div>
     </div>

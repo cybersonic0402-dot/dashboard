@@ -31,6 +31,7 @@ import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as ApiSyncLoopRouteImport } from './routes/api.sync-loop'
 import { Route as ApiSyncRouteImport } from './routes/api.sync'
 import { Route as ApiJorttRouteImport } from './routes/api.jortt'
+import { Route as ApiIgImageRouteImport } from './routes/api.ig-image'
 import { Route as ApiIgDebugRouteImport } from './routes/api.ig-debug'
 import { Route as ApiShopifyInstallRouteImport } from './routes/api.shopify.install'
 import { Route as ApiShopifyCallbackRouteImport } from './routes/api.shopify.callback'
@@ -154,6 +155,11 @@ const ApiJorttRoute = ApiJorttRouteImport.update({
   path: '/api/jortt',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiIgImageRoute = ApiIgImageRouteImport.update({
+  id: '/api/ig-image',
+  path: '/api/ig-image',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiIgDebugRoute = ApiIgDebugRouteImport.update({
   id: '/api/ig-debug',
   path: '/api/ig-debug',
@@ -221,6 +227,7 @@ export interface FileRoutesByFullPath {
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
+  '/api/ig-image': typeof ApiIgImageRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
@@ -256,6 +263,7 @@ export interface FileRoutesByTo {
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
+  '/api/ig-image': typeof ApiIgImageRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
@@ -292,6 +300,7 @@ export interface FileRoutesById {
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
+  '/api/ig-image': typeof ApiIgImageRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
@@ -329,6 +338,7 @@ export interface FileRouteTypes {
     | '/subscriptions'
     | '/triple-whale'
     | '/api/ig-debug'
+    | '/api/ig-image'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
@@ -364,6 +374,7 @@ export interface FileRouteTypes {
     | '/subscriptions'
     | '/triple-whale'
     | '/api/ig-debug'
+    | '/api/ig-image'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
@@ -399,6 +410,7 @@ export interface FileRouteTypes {
     | '/subscriptions'
     | '/triple-whale'
     | '/api/ig-debug'
+    | '/api/ig-image'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
@@ -435,6 +447,7 @@ export interface RootRouteChildren {
   SubscriptionsRoute: typeof SubscriptionsRoute
   TripleWhaleRoute: typeof TripleWhaleRoute
   ApiIgDebugRoute: typeof ApiIgDebugRoute
+  ApiIgImageRoute: typeof ApiIgImageRoute
   ApiJorttRoute: typeof ApiJorttRouteWithChildren
   ApiSyncRoute: typeof ApiSyncRoute
   ApiSyncLoopRoute: typeof ApiSyncLoopRoute
@@ -613,6 +626,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiJorttRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/ig-image': {
+      id: '/api/ig-image'
+      path: '/api/ig-image'
+      fullPath: '/api/ig-image'
+      preLoaderRoute: typeof ApiIgImageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/ig-debug': {
       id: '/api/ig-debug'
       path: '/api/ig-debug'
@@ -730,6 +750,7 @@ const rootRouteChildren: RootRouteChildren = {
   SubscriptionsRoute: SubscriptionsRoute,
   TripleWhaleRoute: TripleWhaleRoute,
   ApiIgDebugRoute: ApiIgDebugRoute,
+  ApiIgImageRoute: ApiIgImageRoute,
   ApiJorttRoute: ApiJorttRouteWithChildren,
   ApiSyncRoute: ApiSyncRoute,
   ApiSyncLoopRoute: ApiSyncLoopRoute,
