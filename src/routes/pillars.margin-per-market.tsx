@@ -207,7 +207,7 @@ function RetentionEconomics({ econ }: { econ: { markets: any[] } | null }) {
     <>
       {/* ── Retention / LTV ── */}
       <div className="rounded-xl border bg-white shadow-sm p-5">
-        <div class‌Name="flex items-start justify-between flex-wrap gap-2">
+        <div className="flex items-start justify-between flex-wrap gap-2">
           <div className="flex items-start gap-2.5">
             <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-violet-100">
               <Users className="h-4 w-4 text-violet-700" />
