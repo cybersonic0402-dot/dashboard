@@ -20,6 +20,21 @@ import { fetchPicqerInventory, probePicqer } from "./picqer.server";
 import { getLoopDbStatus, getLoopApiPending } from "./loop-db.server";
 import { resetLoopState, getLoopSyncState, getLoopSyncRuns, getLoopSyncErrors } from "./loop-sync.server";
 import { triggerRemoteLoopSync, isRemoteLoopSyncConfigured } from "./loop-remote.server";
+import {
+  getChannelPacing,
+  upsertChannelTarget,
+  deleteChannelTarget,
+  PACING_CHANNELS,
+  PACING_MARKETS,
+  type Channel,
+  type Market,
+} from "./channel-pacing.server";
+import { buildRevenueForecast } from "./revenue-forecast.server";
+import {
+  listScenarios,
+  getScenario,
+  deleteScenario,
+} from "./scenarios.server";
 
 // In-memory range cache (per Worker instance). Triple Whale aggregates are
 // expensive (4 stores × external API). For a given (from,to) range the data
@@ -746,3 +761,200 @@ export const getGrowthYearData = createServerFn({ method: "POST" }).middleware([
     growthYearInflight.set(cacheKey, task);
     return await task;
   });
+
+
+// ─── Channel Pacing ────────────────────────────────────────────────────────
+// Read-only: any allowed user can view pacing. Writes require admin (targets
+// drive supplier-visible decisions, so we don't want every viewer flipping
+// them).
+
+function isValidMonthStart(s: string): boolean {
+  return /^\d{4}-\d{2}-01$/.test(s);
+}
+function isValidIsoDate(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+export const getChannelPacingFn = createServerFn({ method: "POST" })
+  .middleware([requireAllowedUser])
+  .inputValidator((input: { monthStart?: string; today?: string }) => ({
+    monthStart:
+      typeof input?.monthStart === "string" && isValidMonthStart(input.monthStart)
+        ? input.monthStart
+        : undefined,
+    today:
+      typeof input?.today === "string" && isValidIsoDate(input.today)
+        ? input.today
+        : undefined,
+  }))
+  .handler(async ({ data }) => {
+    try {
+      const result = await getChannelPacing({
+        monthStart: data.monthStart,
+        today: data.today,
+      });
+      return { ok: true as const, ...result };
+    } catch (err: any) {
+      console.error("getChannelPacing failed:", err?.message);
+      return { ok: false as const, error: err?.message ?? "Failed to load pacing" };
+    }
+  });
+
+export const setChannelTargetFn = createServerFn({ method: "POST" })
+  .middleware([requireAdminUser])
+  .inputValidator((input: {
+    market: string;
+    channel: string;
+    month: string;
+    spend_target: number;
+    roas_target: number;
+    notes?: string | null;
+  }) => {
+    if (!PACING_MARKETS.includes(input.market as Market)) {
+      throw new Error(`Invalid market: ${input.market}`);
+    }
+    if (!PACING_CHANNELS.includes(input.channel as Channel)) {
+      throw new Error(`Invalid channel: ${input.channel}`);
+    }
+    if (!isValidMonthStart(input.month)) {
+      throw new Error(`Invalid month (expected YYYY-MM-01): ${input.month}`);
+    }
+    const spend = Number(input.spend_target);
+    const roas = Number(input.roas_target);
+    if (!isFinite(spend) || spend < 0) throw new Error("spend_target must be >= 0");
+    if (!isFinite(roas) || roas < 0) throw new Error("roas_target must be >= 0");
+    return {
+      market: input.market as Market,
+      channel: input.channel as Channel,
+      month: input.month,
+      spend_target: spend,
+      roas_target: roas,
+      notes: input.notes ?? null,
+    };
+  })
+  .handler(async ({ data }) => {
+    const res = await upsertChannelTarget(data);
+    return res;
+  });
+
+export const deleteChannelTargetFn = createServerFn({ method: "POST" })
+  .middleware([requireAdminUser])
+  .inputValidator((input: { id: string }) => {
+    if (!input?.id || typeof input.id !== "string") {
+      throw new Error("id is required");
+    }
+    return { id: input.id };
+  })
+  .handler(async ({ data }) => {
+    const res = await deleteChannelTarget(data.id);
+    return res;
+  });
+
+
+// ─── Revenue Forecast (cohort LTV, 3 streams, P50/P90) ─────────────────────
+// Read-only — any allowed user can view. Assumptions are passed per request
+// so editing scenarios doesn't require admin or DB writes (saved scenarios
+// land in a separate feature).
+export const getRevenueForecastFn = createServerFn({ method: "POST" })
+  .middleware([requireAllowedUser])
+  .inputValidator((input: {
+    startMonth?: string;
+    horizonMonths?: number;
+    monthlyGrowthRate?: number;
+    churnRateOverride?: number | null;
+    subscriberRateOverride?: number | null;
+  }) => {
+    const out: {
+      startMonth?: string;
+      horizonMonths?: number;
+      assumptions: {
+        monthlyGrowthRate?: number;
+        churnRateOverride?: number | null;
+        subscriberRateOverride?: number | null;
+      };
+    } = { assumptions: {} };
+    if (typeof input?.startMonth === "string" && isValidMonthStart(input.startMonth)) {
+      out.startMonth = input.startMonth;
+    }
+    if (Number.isFinite(input?.horizonMonths)) {
+      out.horizonMonths = Math.min(24, Math.max(1, Math.floor(Number(input.horizonMonths))));
+    }
+    if (Number.isFinite(input?.monthlyGrowthRate)) {
+      out.assumptions.monthlyGrowthRate = Number(input.monthlyGrowthRate);
+    }
+    if (input?.churnRateOverride === null) {
+      out.assumptions.churnRateOverride = null;
+    } else if (Number.isFinite(input?.churnRateOverride)) {
+      out.assumptions.churnRateOverride = Number(input.churnRateOverride);
+    }
+    if (input?.subscriberRateOverride === null) {
+      out.assumptions.subscriberRateOverride = null;
+    } else if (Number.isFinite(input?.subscriberRateOverride)) {
+      out.assumptions.subscriberRateOverride = Number(input.subscriberRateOverride);
+    }
+    return out;
+  })
+  .handler(async ({ data }) => {
+    try {
+      const result = await buildRevenueForecast({
+        startMonth: data.startMonth,
+        horizonMonths: data.horizonMonths,
+        assumptions: data.assumptions,
+      });
+      return { ok: true as const, ...result };
+    } catch (err: any) {
+      console.error("getRevenueForecast failed:", err?.message);
+      return { ok: false as const, error: err?.message ?? "Forecast failed" };
+    }
+  });
+
+// ─── Forecast scenarios (saved what-if forecasts) ──────────────────────────
+// Returns are run through JSON.parse(JSON.stringify(...)) so the TanStack
+// Start serializer doesn't choke on jsonb columns (assumptions/events) typed
+// as Record<string, unknown> / mixed shapes.
+function jsonClean<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export const listScenariosFn = createServerFn({ method: "POST" })
+  .middleware([requireAllowedUser])
+  .handler(async () => {
+    try {
+      const rows = await listScenarios();
+      return jsonClean({ ok: true as const, scenarios: rows as any[] });
+    } catch (err: any) {
+      return { ok: false as const, error: err?.message ?? "Failed to list scenarios" };
+    }
+  });
+
+export const loadScenarioFn = createServerFn({ method: "POST" })
+  .middleware([requireAllowedUser])
+  .inputValidator((input: { id: string }) => {
+    if (!input?.id || typeof input.id !== "string") throw new Error("id required");
+    return { id: input.id };
+  })
+  .handler(async ({ data }) => {
+    const scenario = await getScenario(data.id);
+    if (!scenario) return { ok: false as const, error: "Scenario not found" };
+    try {
+      const forecast = await buildRevenueForecast({
+        horizonMonths: scenario.assumptions.horizonMonths,
+        assumptions: scenario.assumptions,
+      });
+      return jsonClean({
+        ok: true as const,
+        scenario: scenario as any,
+        forecast: forecast as any,
+      });
+    } catch (err: any) {
+      return { ok: false as const, error: err?.message ?? "Forecast failed" };
+    }
+  });
+
+export const deleteScenarioFn = createServerFn({ method: "POST" })
+  .middleware([requireAdminUser])
+  .inputValidator((input: { id: string }) => {
+    if (!input?.id || typeof input.id !== "string") throw new Error("id required");
+    return { id: input.id };
+  })
+  .handler(async ({ data }) => await deleteScenario(data.id));

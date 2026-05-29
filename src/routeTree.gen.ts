@@ -16,23 +16,30 @@ import { Route as OverviewDashboardRouteImport } from './routes/overview-dashboa
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as InvoicesRouteImport } from './routes/invoices'
 import { Route as Ig_zapplyRouteImport } from './routes/ig_zapply'
+import { Route as FinanceAssistantRouteImport } from './routes/finance-assistant'
+import { Route as ClaudeAssistantRouteImport } from './routes/claude-assistant'
 import { Route as AccountingRouteImport } from './routes/accounting'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PillarsValuationRouteImport } from './routes/pillars.valuation'
+import { Route as PillarsRevenueForecastRouteImport } from './routes/pillars.revenue-forecast'
 import { Route as PillarsMonthlyOverviewRouteImport } from './routes/pillars.monthly-overview'
 import { Route as PillarsMarginPerMarketRouteImport } from './routes/pillars.margin-per-market'
 import { Route as PillarsForecastRouteImport } from './routes/pillars.forecast'
 import { Route as PillarsDailyPnlRouteImport } from './routes/pillars.daily-pnl'
+import { Route as PillarsChannelPacingRouteImport } from './routes/pillars.channel-pacing'
 import { Route as PillarsBalanceSheetRouteImport } from './routes/pillars.balance-sheet'
 import { Route as OperationsSyncStatusRouteImport } from './routes/operations.sync-status'
 import { Route as OperationsReconciliationRouteImport } from './routes/operations.reconciliation'
 import { Route as AuthLogoutRouteImport } from './routes/auth.logout'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
+import { Route as ApiZapplyTokenRouteImport } from './routes/api.zapply-token'
 import { Route as ApiSyncLoopRouteImport } from './routes/api.sync-loop'
 import { Route as ApiSyncRouteImport } from './routes/api.sync'
 import { Route as ApiJorttRouteImport } from './routes/api.jortt'
 import { Route as ApiIgImageRouteImport } from './routes/api.ig-image'
 import { Route as ApiIgDebugRouteImport } from './routes/api.ig-debug'
+import { Route as ApiForecastChatRouteImport } from './routes/api.forecast-chat'
+import { Route as ApiClaudeChatRouteImport } from './routes/api.claude-chat'
 import { Route as ApiShopifyInstallRouteImport } from './routes/api.shopify.install'
 import { Route as ApiShopifyCallbackRouteImport } from './routes/api.shopify.callback'
 import { Route as ApiPublicSyncRouteImport } from './routes/api.public.sync'
@@ -79,6 +86,16 @@ const Ig_zapplyRoute = Ig_zapplyRouteImport.update({
   path: '/ig_zapply',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FinanceAssistantRoute = FinanceAssistantRouteImport.update({
+  id: '/finance-assistant',
+  path: '/finance-assistant',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClaudeAssistantRoute = ClaudeAssistantRouteImport.update({
+  id: '/claude-assistant',
+  path: '/claude-assistant',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AccountingRoute = AccountingRouteImport.update({
   id: '/accounting',
   path: '/accounting',
@@ -92,6 +109,11 @@ const IndexRoute = IndexRouteImport.update({
 const PillarsValuationRoute = PillarsValuationRouteImport.update({
   id: '/pillars/valuation',
   path: '/pillars/valuation',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PillarsRevenueForecastRoute = PillarsRevenueForecastRouteImport.update({
+  id: '/pillars/revenue-forecast',
+  path: '/pillars/revenue-forecast',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PillarsMonthlyOverviewRoute = PillarsMonthlyOverviewRouteImport.update({
@@ -112,6 +134,11 @@ const PillarsForecastRoute = PillarsForecastRouteImport.update({
 const PillarsDailyPnlRoute = PillarsDailyPnlRouteImport.update({
   id: '/pillars/daily-pnl',
   path: '/pillars/daily-pnl',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PillarsChannelPacingRoute = PillarsChannelPacingRouteImport.update({
+  id: '/pillars/channel-pacing',
+  path: '/pillars/channel-pacing',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PillarsBalanceSheetRoute = PillarsBalanceSheetRouteImport.update({
@@ -140,6 +167,11 @@ const AuthCallbackRoute = AuthCallbackRouteImport.update({
   path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiZapplyTokenRoute = ApiZapplyTokenRouteImport.update({
+  id: '/api/zapply-token',
+  path: '/api/zapply-token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSyncLoopRoute = ApiSyncLoopRouteImport.update({
   id: '/api/sync-loop',
   path: '/api/sync-loop',
@@ -163,6 +195,16 @@ const ApiIgImageRoute = ApiIgImageRouteImport.update({
 const ApiIgDebugRoute = ApiIgDebugRouteImport.update({
   id: '/api/ig-debug',
   path: '/api/ig-debug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiForecastChatRoute = ApiForecastChatRouteImport.update({
+  id: '/api/forecast-chat',
+  path: '/api/forecast-chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiClaudeChatRoute = ApiClaudeChatRouteImport.update({
+  id: '/api/claude-chat',
+  path: '/api/claude-chat',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiShopifyInstallRoute = ApiShopifyInstallRouteImport.update({
@@ -219,6 +261,8 @@ const ApiAuthXeroCallbackRoute = ApiAuthXeroCallbackRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/accounting': typeof AccountingRoute
+  '/claude-assistant': typeof ClaudeAssistantRoute
+  '/finance-assistant': typeof FinanceAssistantRoute
   '/ig_zapply': typeof Ig_zapplyRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
@@ -226,20 +270,25 @@ export interface FileRoutesByFullPath {
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/api/claude-chat': typeof ApiClaudeChatRoute
+  '/api/forecast-chat': typeof ApiForecastChatRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
   '/api/ig-image': typeof ApiIgImageRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
+  '/api/zapply-token': typeof ApiZapplyTokenRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/operations/reconciliation': typeof OperationsReconciliationRoute
   '/operations/sync-status': typeof OperationsSyncStatusRoute
   '/pillars/balance-sheet': typeof PillarsBalanceSheetRoute
+  '/pillars/channel-pacing': typeof PillarsChannelPacingRoute
   '/pillars/daily-pnl': typeof PillarsDailyPnlRoute
   '/pillars/forecast': typeof PillarsForecastRoute
   '/pillars/margin-per-market': typeof PillarsMarginPerMarketRoute
   '/pillars/monthly-overview': typeof PillarsMonthlyOverviewRoute
+  '/pillars/revenue-forecast': typeof PillarsRevenueForecastRoute
   '/pillars/valuation': typeof PillarsValuationRoute
   '/api/auth/jortt': typeof ApiAuthJorttRoute
   '/api/auth/xero': typeof ApiAuthXeroRouteWithChildren
@@ -255,6 +304,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/accounting': typeof AccountingRoute
+  '/claude-assistant': typeof ClaudeAssistantRoute
+  '/finance-assistant': typeof FinanceAssistantRoute
   '/ig_zapply': typeof Ig_zapplyRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
@@ -262,20 +313,25 @@ export interface FileRoutesByTo {
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/api/claude-chat': typeof ApiClaudeChatRoute
+  '/api/forecast-chat': typeof ApiForecastChatRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
   '/api/ig-image': typeof ApiIgImageRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
+  '/api/zapply-token': typeof ApiZapplyTokenRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/operations/reconciliation': typeof OperationsReconciliationRoute
   '/operations/sync-status': typeof OperationsSyncStatusRoute
   '/pillars/balance-sheet': typeof PillarsBalanceSheetRoute
+  '/pillars/channel-pacing': typeof PillarsChannelPacingRoute
   '/pillars/daily-pnl': typeof PillarsDailyPnlRoute
   '/pillars/forecast': typeof PillarsForecastRoute
   '/pillars/margin-per-market': typeof PillarsMarginPerMarketRoute
   '/pillars/monthly-overview': typeof PillarsMonthlyOverviewRoute
+  '/pillars/revenue-forecast': typeof PillarsRevenueForecastRoute
   '/pillars/valuation': typeof PillarsValuationRoute
   '/api/auth/jortt': typeof ApiAuthJorttRoute
   '/api/auth/xero': typeof ApiAuthXeroRouteWithChildren
@@ -292,6 +348,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/accounting': typeof AccountingRoute
+  '/claude-assistant': typeof ClaudeAssistantRoute
+  '/finance-assistant': typeof FinanceAssistantRoute
   '/ig_zapply': typeof Ig_zapplyRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
@@ -299,20 +357,25 @@ export interface FileRoutesById {
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/api/claude-chat': typeof ApiClaudeChatRoute
+  '/api/forecast-chat': typeof ApiForecastChatRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
   '/api/ig-image': typeof ApiIgImageRoute
   '/api/jortt': typeof ApiJorttRouteWithChildren
   '/api/sync': typeof ApiSyncRoute
   '/api/sync-loop': typeof ApiSyncLoopRoute
+  '/api/zapply-token': typeof ApiZapplyTokenRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/operations/reconciliation': typeof OperationsReconciliationRoute
   '/operations/sync-status': typeof OperationsSyncStatusRoute
   '/pillars/balance-sheet': typeof PillarsBalanceSheetRoute
+  '/pillars/channel-pacing': typeof PillarsChannelPacingRoute
   '/pillars/daily-pnl': typeof PillarsDailyPnlRoute
   '/pillars/forecast': typeof PillarsForecastRoute
   '/pillars/margin-per-market': typeof PillarsMarginPerMarketRoute
   '/pillars/monthly-overview': typeof PillarsMonthlyOverviewRoute
+  '/pillars/revenue-forecast': typeof PillarsRevenueForecastRoute
   '/pillars/valuation': typeof PillarsValuationRoute
   '/api/auth/jortt': typeof ApiAuthJorttRoute
   '/api/auth/xero': typeof ApiAuthXeroRouteWithChildren
@@ -330,6 +393,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/accounting'
+    | '/claude-assistant'
+    | '/finance-assistant'
     | '/ig_zapply'
     | '/invoices'
     | '/login'
@@ -337,20 +402,25 @@ export interface FileRouteTypes {
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/api/claude-chat'
+    | '/api/forecast-chat'
     | '/api/ig-debug'
     | '/api/ig-image'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
+    | '/api/zapply-token'
     | '/auth/callback'
     | '/auth/logout'
     | '/operations/reconciliation'
     | '/operations/sync-status'
     | '/pillars/balance-sheet'
+    | '/pillars/channel-pacing'
     | '/pillars/daily-pnl'
     | '/pillars/forecast'
     | '/pillars/margin-per-market'
     | '/pillars/monthly-overview'
+    | '/pillars/revenue-forecast'
     | '/pillars/valuation'
     | '/api/auth/jortt'
     | '/api/auth/xero'
@@ -366,6 +436,8 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/accounting'
+    | '/claude-assistant'
+    | '/finance-assistant'
     | '/ig_zapply'
     | '/invoices'
     | '/login'
@@ -373,20 +445,25 @@ export interface FileRouteTypes {
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/api/claude-chat'
+    | '/api/forecast-chat'
     | '/api/ig-debug'
     | '/api/ig-image'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
+    | '/api/zapply-token'
     | '/auth/callback'
     | '/auth/logout'
     | '/operations/reconciliation'
     | '/operations/sync-status'
     | '/pillars/balance-sheet'
+    | '/pillars/channel-pacing'
     | '/pillars/daily-pnl'
     | '/pillars/forecast'
     | '/pillars/margin-per-market'
     | '/pillars/monthly-overview'
+    | '/pillars/revenue-forecast'
     | '/pillars/valuation'
     | '/api/auth/jortt'
     | '/api/auth/xero'
@@ -402,6 +479,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/accounting'
+    | '/claude-assistant'
+    | '/finance-assistant'
     | '/ig_zapply'
     | '/invoices'
     | '/login'
@@ -409,20 +488,25 @@ export interface FileRouteTypes {
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/api/claude-chat'
+    | '/api/forecast-chat'
     | '/api/ig-debug'
     | '/api/ig-image'
     | '/api/jortt'
     | '/api/sync'
     | '/api/sync-loop'
+    | '/api/zapply-token'
     | '/auth/callback'
     | '/auth/logout'
     | '/operations/reconciliation'
     | '/operations/sync-status'
     | '/pillars/balance-sheet'
+    | '/pillars/channel-pacing'
     | '/pillars/daily-pnl'
     | '/pillars/forecast'
     | '/pillars/margin-per-market'
     | '/pillars/monthly-overview'
+    | '/pillars/revenue-forecast'
     | '/pillars/valuation'
     | '/api/auth/jortt'
     | '/api/auth/xero'
@@ -439,6 +523,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AccountingRoute: typeof AccountingRoute
+  ClaudeAssistantRoute: typeof ClaudeAssistantRoute
+  FinanceAssistantRoute: typeof FinanceAssistantRoute
   Ig_zapplyRoute: typeof Ig_zapplyRoute
   InvoicesRoute: typeof InvoicesRoute
   LoginRoute: typeof LoginRoute
@@ -446,20 +532,25 @@ export interface RootRouteChildren {
   StoreRoute: typeof StoreRoute
   SubscriptionsRoute: typeof SubscriptionsRoute
   TripleWhaleRoute: typeof TripleWhaleRoute
+  ApiClaudeChatRoute: typeof ApiClaudeChatRoute
+  ApiForecastChatRoute: typeof ApiForecastChatRoute
   ApiIgDebugRoute: typeof ApiIgDebugRoute
   ApiIgImageRoute: typeof ApiIgImageRoute
   ApiJorttRoute: typeof ApiJorttRouteWithChildren
   ApiSyncRoute: typeof ApiSyncRoute
   ApiSyncLoopRoute: typeof ApiSyncLoopRoute
+  ApiZapplyTokenRoute: typeof ApiZapplyTokenRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   AuthLogoutRoute: typeof AuthLogoutRoute
   OperationsReconciliationRoute: typeof OperationsReconciliationRoute
   OperationsSyncStatusRoute: typeof OperationsSyncStatusRoute
   PillarsBalanceSheetRoute: typeof PillarsBalanceSheetRoute
+  PillarsChannelPacingRoute: typeof PillarsChannelPacingRoute
   PillarsDailyPnlRoute: typeof PillarsDailyPnlRoute
   PillarsForecastRoute: typeof PillarsForecastRoute
   PillarsMarginPerMarketRoute: typeof PillarsMarginPerMarketRoute
   PillarsMonthlyOverviewRoute: typeof PillarsMonthlyOverviewRoute
+  PillarsRevenueForecastRoute: typeof PillarsRevenueForecastRoute
   PillarsValuationRoute: typeof PillarsValuationRoute
   ApiAuthJorttRoute: typeof ApiAuthJorttRoute
   ApiAuthXeroRoute: typeof ApiAuthXeroRouteWithChildren
@@ -521,6 +612,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof Ig_zapplyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/finance-assistant': {
+      id: '/finance-assistant'
+      path: '/finance-assistant'
+      fullPath: '/finance-assistant'
+      preLoaderRoute: typeof FinanceAssistantRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/claude-assistant': {
+      id: '/claude-assistant'
+      path: '/claude-assistant'
+      fullPath: '/claude-assistant'
+      preLoaderRoute: typeof ClaudeAssistantRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/accounting': {
       id: '/accounting'
       path: '/accounting'
@@ -540,6 +645,13 @@ declare module '@tanstack/react-router' {
       path: '/pillars/valuation'
       fullPath: '/pillars/valuation'
       preLoaderRoute: typeof PillarsValuationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pillars/revenue-forecast': {
+      id: '/pillars/revenue-forecast'
+      path: '/pillars/revenue-forecast'
+      fullPath: '/pillars/revenue-forecast'
+      preLoaderRoute: typeof PillarsRevenueForecastRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pillars/monthly-overview': {
@@ -568,6 +680,13 @@ declare module '@tanstack/react-router' {
       path: '/pillars/daily-pnl'
       fullPath: '/pillars/daily-pnl'
       preLoaderRoute: typeof PillarsDailyPnlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pillars/channel-pacing': {
+      id: '/pillars/channel-pacing'
+      path: '/pillars/channel-pacing'
+      fullPath: '/pillars/channel-pacing'
+      preLoaderRoute: typeof PillarsChannelPacingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pillars/balance-sheet': {
@@ -605,6 +724,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/zapply-token': {
+      id: '/api/zapply-token'
+      path: '/api/zapply-token'
+      fullPath: '/api/zapply-token'
+      preLoaderRoute: typeof ApiZapplyTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/sync-loop': {
       id: '/api/sync-loop'
       path: '/api/sync-loop'
@@ -638,6 +764,20 @@ declare module '@tanstack/react-router' {
       path: '/api/ig-debug'
       fullPath: '/api/ig-debug'
       preLoaderRoute: typeof ApiIgDebugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/forecast-chat': {
+      id: '/api/forecast-chat'
+      path: '/api/forecast-chat'
+      fullPath: '/api/forecast-chat'
+      preLoaderRoute: typeof ApiForecastChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/claude-chat': {
+      id: '/api/claude-chat'
+      path: '/api/claude-chat'
+      fullPath: '/api/claude-chat'
+      preLoaderRoute: typeof ApiClaudeChatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/shopify/install': {
@@ -742,6 +882,8 @@ const ApiAuthXeroRouteWithChildren = ApiAuthXeroRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountingRoute: AccountingRoute,
+  ClaudeAssistantRoute: ClaudeAssistantRoute,
+  FinanceAssistantRoute: FinanceAssistantRoute,
   Ig_zapplyRoute: Ig_zapplyRoute,
   InvoicesRoute: InvoicesRoute,
   LoginRoute: LoginRoute,
@@ -749,20 +891,25 @@ const rootRouteChildren: RootRouteChildren = {
   StoreRoute: StoreRoute,
   SubscriptionsRoute: SubscriptionsRoute,
   TripleWhaleRoute: TripleWhaleRoute,
+  ApiClaudeChatRoute: ApiClaudeChatRoute,
+  ApiForecastChatRoute: ApiForecastChatRoute,
   ApiIgDebugRoute: ApiIgDebugRoute,
   ApiIgImageRoute: ApiIgImageRoute,
   ApiJorttRoute: ApiJorttRouteWithChildren,
   ApiSyncRoute: ApiSyncRoute,
   ApiSyncLoopRoute: ApiSyncLoopRoute,
+  ApiZapplyTokenRoute: ApiZapplyTokenRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   AuthLogoutRoute: AuthLogoutRoute,
   OperationsReconciliationRoute: OperationsReconciliationRoute,
   OperationsSyncStatusRoute: OperationsSyncStatusRoute,
   PillarsBalanceSheetRoute: PillarsBalanceSheetRoute,
+  PillarsChannelPacingRoute: PillarsChannelPacingRoute,
   PillarsDailyPnlRoute: PillarsDailyPnlRoute,
   PillarsForecastRoute: PillarsForecastRoute,
   PillarsMarginPerMarketRoute: PillarsMarginPerMarketRoute,
   PillarsMonthlyOverviewRoute: PillarsMonthlyOverviewRoute,
+  PillarsRevenueForecastRoute: PillarsRevenueForecastRoute,
   PillarsValuationRoute: PillarsValuationRoute,
   ApiAuthJorttRoute: ApiAuthJorttRoute,
   ApiAuthXeroRoute: ApiAuthXeroRouteWithChildren,

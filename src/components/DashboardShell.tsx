@@ -14,6 +14,8 @@ import {
   Waves,
   FileText,
   Briefcase,
+  Gauge,
+  TrendingUp,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -46,6 +48,8 @@ const pillarItems: NavItem[] = [
   { to: "/pillars/monthly-overview", label: "Monthly overview", icon: CalendarDays },
   { to: "/pillars/balance-sheet", label: "Balance sheet", icon: Scale },
   { to: "/pillars/forecast", label: "Forecast", icon: LineChart },
+  { to: "/pillars/revenue-forecast", label: "Revenue forecast (LTV)", icon: TrendingUp },
+  { to: "/pillars/channel-pacing", label: "Channel pacing", icon: Gauge },
   { to: "/pillars/valuation", label: "Business valuation", icon: Briefcase },
 ];
 

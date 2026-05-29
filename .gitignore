@@ -32,3 +32,6 @@ dist-ssr
 *.sw?
 
 .env
+
+/supabase/.temp
+/supabase/migrations

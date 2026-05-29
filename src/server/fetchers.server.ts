@@ -1295,6 +1295,7 @@ export async function fetchTripleWhale(fromDate?: string, toDate?: string, progr
           ncRoas: twMetric(m, "newCustomersRoas"), // New Customer ROAS
           fbRoas: twMetric(m, "facebookRoas"), // Facebook ROAS
           googleRoas: twMetric(m, "googleRoas"), // Google ROAS
+          tiktokRoas: twMetric(m, "tiktokRoas"), // TikTok ROAS
           mer: twMetric(m, "mer"), // Marketing Efficiency Ratio
           ncpa: moneyMetric("newCustomersCpa"), // New Customer CPA
           ltvCpa: twMetric(m, "ltvCpa"), // LTV:CPA ratio
