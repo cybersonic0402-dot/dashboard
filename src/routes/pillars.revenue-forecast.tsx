@@ -19,7 +19,6 @@ import {
   loadScenarioFn,
   deleteScenarioFn,
 } from "@/server/dashboard.functions";
-import ZapplyEmbed from "@/components/ZapplyEmbed";
 
 export const Route = createFileRoute("/pillars/revenue-forecast")({
   head: () => ({ meta: [{ title: "Revenue forecast — Zapply" }] }),
@@ -414,7 +413,6 @@ function RevenueForecastPage() {
           </>
         ) : null}
       </div>
-      <ZapplyEmbed />
     </DashboardShell>
   );
 }

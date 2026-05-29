@@ -377,17 +377,22 @@ async function loadSubscriberStatsCached(
   }
 }
 
+// Each subscriber source gets its own short timeout. A slow NL (Juo API
+// pagination) or UK (~52k rows) can't drag the whole bundle past the outer
+// SUBS_TIMEOUT_MS — slow markets just come back empty while fast markets
+// render normally.
+const PER_SOURCE_TIMEOUT_MS = 30_000;
+
 async function loadSubscriberStatsRaw(
   fromIso: string,
   toIso: string,
 ): Promise<Map<string, SubscriberStats>> {
   const out = new Map<string, SubscriberStats>();
   // Each market runs independently via Promise.allSettled so one slow store
-  // (UK Loop has ~43k rows) doesn't break the others. Each Loop call uses
-  // the lightweight count + minimal-column path — orders of magnitude
-  // faster than reading every column for every row.
+  // (UK Loop has ~52k rows) doesn't break the others. UK + US use the
+  // loop_market_summary Postgres RPC (~2s each); NL hits the Juo API.
   const tasks: Array<Promise<{ market: string; stats: SubscriberStats } | null>> = [
-    fetchLoopMarketLight("UK")
+    withTimeout(fetchLoopMarketLight("UK"), PER_SOURCE_TIMEOUT_MS, "Loop UK")
       .then(async (r) => {
         const fx = await getEurRate(r.currency, fromIso, toIso).catch(() => 1);
         return {
@@ -407,7 +412,7 @@ async function loadSubscriberStatsRaw(
         console.warn("[forecast] loop UK failed:", err?.message ?? err);
         return null;
       }),
-    fetchLoopMarketLight("US")
+    withTimeout(fetchLoopMarketLight("US"), PER_SOURCE_TIMEOUT_MS, "Loop US")
       .then(async (r) => {
         const fx = await getEurRate(r.currency, fromIso, toIso).catch(() => 1);
         return {
@@ -427,7 +432,7 @@ async function loadSubscriberStatsRaw(
         console.warn("[forecast] loop US failed:", err?.message ?? err);
         return null;
       }),
-    fetchJuoForRange(fromIso, toIso)
+    withTimeout(fetchJuoForRange(fromIso, toIso), PER_SOURCE_TIMEOUT_MS, "Juo NL")
       .then((rows) => {
         const r = (rows ?? [])[0] as any;
         if (!r) return null;

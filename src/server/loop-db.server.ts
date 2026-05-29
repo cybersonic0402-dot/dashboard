@@ -412,10 +412,10 @@ export async function fetchLoopSubsForFunnelFromDb(): Promise<
 }
 
 // ── Lightweight per-market summary (for revenue forecast) ────────────────
-// fetchLoopFromDb reads ALL rows (~43k for UK) which routinely times out.
-// This variant uses Postgres COUNT(*) for the counts and only reads the
-// two columns needed (price, billing_policy) for ACTIVE rows to compute
-// MRR — dropping payload by ~80% and total time from ~60s to ~5-15s.
+// Calls the loop_market_summary(market_code) RPC which aggregates active
+// subs, MRR (interval-normalised), new/churned-this-month inside Postgres
+// in one query. This replaces the previous client-side pagination path
+// (~37 round trips for UK) — UK now lands in ~1-3s instead of ~60s+.
 export async function fetchLoopMarketLight(marketCode: "UK" | "US"): Promise<{
   market: string;
   flag: string;
@@ -431,57 +431,18 @@ export async function fetchLoopMarketLight(marketCode: "UK" | "US"): Promise<{
 }> {
   const store = LOOP_STORES.find((s) => s.market === marketCode);
   if (!store) throw new Error(`Unknown Loop market: ${marketCode}`);
-  const table = store.table;
 
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-  // 1-3. Counts via head:true — no rows transferred.
-  const [activeRes, newRes, churnedRes] = await Promise.all([
-    supabaseAdmin
-      .from(table as any)
-      .select("*", { count: "exact", head: true })
-      .eq("status", "ACTIVE"),
-    supabaseAdmin
-      .from(table as any)
-      .select("*", { count: "exact", head: true })
-      .gte("created_at", monthStart),
-    supabaseAdmin
-      .from(table as any)
-      .select("*", { count: "exact", head: true })
-      .gte("cancelled_at", monthStart),
-  ]);
-
-  const activeSubs = activeRes.count ?? 0;
-  const newThisMonth = newRes.count ?? 0;
-  const churnedThisMonth = churnedRes.count ?? 0;
-
-  // 4. MRR — read ONLY price + policy for active rows. Page size 1000 is the
-  // PostgREST default cap; with 2 small columns this is ~50KB per page, so a
-  // 37k-row UK book lands in ~38 round trips that are each <1s.
-  const MRR_PAGE = 1000;
-  let mrr = 0;
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabaseAdmin
-      .from(table as any)
-      .select("total_line_item_price,billing_policy")
-      .eq("status", "ACTIVE")
-      .order("id", { ascending: true })
-      .range(from, from + MRR_PAGE - 1);
-    if (error) throw new Error(`${table} MRR read failed at ${from}: ${error.message}`);
-    const batch = (data ?? []) as unknown as Array<{
-      total_line_item_price: string | null;
-      billing_policy: any;
-    }>;
-    if (batch.length === 0) break;
-    for (const r of batch) {
-      const price = parseFloat(r.total_line_item_price ?? "0");
-      mrr += loopPriceToMonthly(price, r.billing_policy);
-    }
-    if (batch.length < MRR_PAGE) break;
-    from += MRR_PAGE;
+  const { data, error } = await (supabaseAdmin as any).rpc("loop_market_summary", {
+    market_code: marketCode,
+  });
+  if (error) {
+    throw new Error(`loop_market_summary(${marketCode}) failed: ${error.message}`);
   }
+  const row = (Array.isArray(data) ? data[0] : data) ?? null;
+  const activeSubs = Number(row?.active_subs ?? 0);
+  const mrr = Number(row?.mrr ?? 0);
+  const newThisMonth = Number(row?.new_this_month ?? 0);
+  const churnedThisMonth = Number(row?.churned_this_month ?? 0);
 
   const arpu = activeSubs > 0 ? +(mrr / activeSubs).toFixed(2) : null;
   const churnRate =

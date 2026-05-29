@@ -20,6 +20,7 @@ import {
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { getSyncStatus } from "@/server/dashboard.functions";
+import ZapplyEmbed from "@/components/ZapplyEmbed";
 import {
   Sidebar,
   SidebarContent,
@@ -275,6 +276,7 @@ export function DashboardShell({
           <main className="flex-1 min-w-0">{children}</main>
         </div>
       </div>
+      <ZapplyEmbed />
     </SidebarProvider>
   );
 }
