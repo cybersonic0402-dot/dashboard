@@ -27,6 +27,7 @@ import {
   type ScenarioEvent,
   type ScenarioSnapshot,
 } from "@/server/scenarios.server";
+import { loadMarketHistory } from "@/server/forecast-history.server";
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
 
@@ -43,6 +44,7 @@ Data sources you have direct read access to via tools:
 - Shopify mirror: monthly order counts and revenue per market
 - Cohort LTV (60/90/180/365-day windows from shopify_cohort_ltv)
 - Channel pacing: MTD spend + ROAS vs target for Meta/Google/TikTok
+- **Market history (up to 36 months Shopify + 24 months Loop)** — monthly orders, new customers, revenue, MRR per market, plus the regression-derived per-market growth rate and seasonal index. Call get_market_history to answer "is the forecast realistic vs the actual trajectory?" type questions.
 - Revenue forecast snapshot itself (rebuild with custom assumptions)
 
 When the user asks about numbers:
@@ -100,6 +102,12 @@ const TOOLS: Anthropic.Tool[] = [
         },
       },
     },
+  },
+  {
+    name: "get_market_history",
+    description:
+      "Returns deep historical trajectory per market: up to 36 months of Shopify orders / revenue / new customers, plus 24 months of Loop subscription state (active subs, new, churned, MRR) for UK and US. Includes the regression-derived monthly growth rate per market AND the seasonal index (calendar-month multipliers). USE THIS to answer questions about historical growth, seasonality, or to validate forecast projections.",
+    input_schema: { type: "object", properties: {} },
   },
   {
     name: "get_channel_pacing",
@@ -320,6 +328,33 @@ async function runTool(
         })),
         note:
           "Loop covers UK + US. NL/Juo subscriber data is fetched live from the build_forecast or get_market_economics tool when needed.",
+      };
+    }
+
+    case "get_market_history": {
+      const result = await loadMarketHistory(["NL", "UK", "US"]);
+      // Trim heavy fields for context efficiency. Keep all months but
+      // compress to a flat shape per market.
+      return {
+        fetchedAt: result.fetchedAt,
+        markets: result.series.map((s) => ({
+          market: s.market,
+          currency: s.currency,
+          trend: s.trend,
+          months: s.months.map((m) => ({
+            month: m.monthIso,
+            orders: m.orders,
+            netRevenueEur: m.netRevenueEur,
+            newCustomers: m.newCustomers,
+            aov: m.aov,
+            activeSubs: m.activeSubs,
+            newSubs: m.newSubs,
+            churnedSubs: m.churnedSubs,
+            mrrEur: m.mrrEur,
+            churnRate: m.churnRate,
+          })),
+        })),
+        diagnostics: result.diagnostics,
       };
     }
 

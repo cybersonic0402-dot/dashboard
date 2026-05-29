@@ -43,6 +43,11 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { fetchTripleWhale, fetchJuoForRange, getEurRate } from "./fetchers.server";
 import { fetchShopifyMonthlyFromDb } from "./shopify-db.server";
 import { fetchLoopMarketLight } from "./loop-db.server";
+import {
+  loadMarketHistory,
+  projectNewCustomers,
+  type MarketHistorySeries,
+} from "./forecast-history.server";
 
 const FORECAST_MARKETS = ["NL", "UK", "US"] as const;
 export type ForecastMarket = (typeof FORECAST_MARKETS)[number];
@@ -73,6 +78,10 @@ export type MarketForecast = {
   // Snapshot of inputs used
   aov: number | null;
   baselineNewCustomersPerMonth: number | null;
+  // Historical trend metrics — populated when shopify history is available
+  historicalGrowthRate: number | null; // decimal/mo, e.g. 0.064 = +6.4%/mo
+  historicalMonthsUsed: number;
+  seasonalIndex: Record<number, number> | null;
   monthlyChurnRate: number | null;
   subscriberRate: number | null;
   startingMrr: number | null;
@@ -598,6 +607,7 @@ function computeMarketForecast(
   cohort: CohortLtvRow | null,
   shopifyMonthly: any[] | null,
   subs: SubscriberStats | null,
+  history: MarketHistorySeries | null,
   assumptions: ForecastAssumptions,
 ): MarketForecast {
   const warnings: string[] = [];
@@ -684,18 +694,48 @@ function computeMarketForecast(
   const cumLtv = buildCumLtvCurve(aov, ltvWindows);
   const incLtv = incrementalFromCum(cumLtv);
 
-  const baseline = baselineNewCustomersFromShopify(market, shopifyMonthly, newCustomerPct);
+  // Baseline: prefer the most recent complete month from real history.
+  // Fall back to "trailing 3-month avg × newCustomerPct" only when no
+  // history series exists for the market.
+  let baseline: number | null = null;
+  if (history && history.months.length >= 2) {
+    // Penultimate month (current month is incomplete and would distort).
+    const last = history.months[history.months.length - 2];
+    baseline = last?.newCustomers ?? null;
+  }
+  if (baseline == null) {
+    baseline = baselineNewCustomersFromShopify(market, shopifyMonthly, newCustomerPct);
+  }
   if (baseline == null) {
     warnings.push("Insufficient Shopify history — new-customer baseline missing.");
   }
 
   const confidenceFactor = computeConfidenceFactor(ltvWindows, matureCustomers);
 
-  // Project N(m) for m = 1..horizon
+  // Historical trend metrics for the response payload.
+  const historicalGrowthRate = history?.trend.newCustomerGrowthRate ?? null;
+  const historicalMonthsUsed = history?.trend.monthsUsed ?? 0;
+  const seasonalIndex = history?.trend.seasonalIndex ?? null;
+
+  // Project N(m) for m = 1..horizon. Three sources of growth (in priority):
+  //   1. User-supplied monthly growth rate (always wins if non-zero)
+  //   2. Per-market historical growth rate from regression
+  //   3. Flat (0%) if neither available
+  // Seasonality multiplies on top so November / Black Friday etc. lift.
+  const effectiveGrowth =
+    assumptions.monthlyGrowthRate !== 0
+      ? assumptions.monthlyGrowthRate
+      : (historicalGrowthRate ?? 0);
   const N: number[] = new Array(horizon + 1).fill(0);
   N[0] = baseline ?? 0; // a phantom "month 0" used for cohort math
   for (let m = 1; m <= horizon; m++) {
-    N[m] = N[m - 1] * (1 + assumptions.monthlyGrowthRate);
+    const futureIso = addMonthsIso(startMonth, m - 1);
+    const monthOfYear = Number(futureIso.slice(5, 7));
+    const seasonal = (seasonalIndex && seasonalIndex[monthOfYear]) || 1;
+    // Compound trend off the BASELINE (not off the previous month) so the
+    // seasonal multiplier doesn't compound on itself across the curve.
+    const trended = (baseline ?? 0) * Math.pow(1 + effectiveGrowth, m);
+    N[m] = trended * seasonal;
   }
 
   const months: ForecastMonthRow[] = [];
@@ -761,6 +801,9 @@ function computeMarketForecast(
     currency: "EUR",
     aov: aov != null ? +aov.toFixed(2) : null,
     baselineNewCustomersPerMonth: baseline,
+    historicalGrowthRate,
+    historicalMonthsUsed,
+    seasonalIndex,
     monthlyChurnRate: churnRate,
     subscriberRate,
     startingMrr: startingMrr != null ? +startingMrr.toFixed(2) : null,
@@ -808,19 +851,26 @@ export async function buildRevenueForecast(opts?: {
     return todayIso(d);
   })();
 
-  // All four loaders run in parallel. Each one has its own timeout + cache;
+  // All loaders run in parallel. Each has its own timeout + cache;
   // failures don't take the whole forecast down — they just degrade that
   // section and surface in the diagnostics strip.
-  const [cohortR, twResult, monthlyR, subsR] = await withTimeout(
+  const [cohortR, twResult, monthlyR, subsR, historyR] = await withTimeout(
     Promise.all([
       loadCohortLtvCached(),
       fetchTripleWhaleCached(twFromDate, twToDate),
       loadShopifyMonthlyCached(),
       loadSubscriberStatsCached(twFromDate, twToDate),
+      loadMarketHistory([...FORECAST_MARKETS]).catch((err) => {
+        console.warn("[forecast] history failed:", err?.message ?? err);
+        return { series: [], diagnostics: [], fetchedAt: new Date().toISOString() };
+      }),
     ]),
     FORECAST_OUTER_TIMEOUT_MS,
     "Revenue forecast (outer)",
   );
+
+  const historyByMarket = new Map<string, MarketHistorySeries>();
+  for (const s of historyR.series) historyByMarket.set(s.market, s);
 
   const cohort = cohortR.value;
   const subsByMarket = subsR.value;
@@ -842,6 +892,7 @@ export async function buildRevenueForecast(opts?: {
         cohort.get(market) ?? null,
         shopifyMonthly,
         subsByMarket.get(market) ?? null,
+        historyByMarket.get(market) ?? null,
         assumptions,
       ),
     );
@@ -872,6 +923,7 @@ export async function buildRevenueForecast(opts?: {
       cached: subsR.cached,
       error: subsR.error,
     },
+    ...((historyR.diagnostics ?? []) as SourceDiagnostic[]),
   ];
 
   return {

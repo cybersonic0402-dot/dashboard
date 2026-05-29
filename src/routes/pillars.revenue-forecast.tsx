@@ -49,6 +49,9 @@ type MarketForecast = {
   currency: string;
   aov: number | null;
   baselineNewCustomersPerMonth: number | null;
+  historicalGrowthRate: number | null;
+  historicalMonthsUsed: number;
+  seasonalIndex: Record<number, number> | null;
   monthlyChurnRate: number | null;
   subscriberRate: number | null;
   startingMrr: number | null;
@@ -456,7 +459,7 @@ function AssumptionsBar(props: {
         </Field>
         <Field
           label="Monthly growth %"
-          hint="Applied to baseline new customers each month."
+          hint="0 = use each market's historical trend automatically. Any non-zero value overrides history."
         >
           <input
             type="number"
@@ -733,6 +736,37 @@ function MarketAssumptionsCard({ market }: { market: MarketForecast | null }) {
         <Mini label="Subscriber rate" value={fmtPct(market.subscriberRate)} />
         <Mini label="Starting MRR" value={fmtMoney(market.startingMrr)} />
         <Mini label="ARPU / subscriber" value={fmtMoney(market.arpuPerSubscriber)} />
+        <Mini
+          label={`Historical growth (${market.historicalMonthsUsed} mo)`}
+          value={
+            market.historicalGrowthRate != null
+              ? `${(market.historicalGrowthRate * 100).toFixed(1)}%/mo`
+              : "—"
+          }
+        />
+        <Mini
+          label="Seasonal peak"
+          value={
+            market.seasonalIndex
+              ? (() => {
+                  const entries = Object.entries(market.seasonalIndex);
+                  if (entries.length === 0) return "—";
+                  let bestMo = 1;
+                  let bestMul = 1;
+                  for (const [mo, mul] of entries) {
+                    if (Number(mul) > bestMul) {
+                      bestMul = Number(mul);
+                      bestMo = Number(mo);
+                    }
+                  }
+                  const monthName = new Date(2020, bestMo - 1, 1).toLocaleString("en-GB", {
+                    month: "short",
+                  });
+                  return `${monthName} (${bestMul.toFixed(2)}×)`;
+                })()
+              : "—"
+          }
+        />
         <Mini label="LTV 90d" value={fmtMoney(market.ltvWindows.day90)} />
         <Mini label="LTV 365d" value={fmtMoney(market.ltvWindows.day365)} />
       </div>
