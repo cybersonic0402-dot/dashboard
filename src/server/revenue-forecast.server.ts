@@ -40,6 +40,7 @@
  * P50 and P90, plus the assumption snapshot used to compute it.
  */
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { ageMinutes, readCache, writeCache } from "./cache.server";
 import { fetchTripleWhale, fetchJuoForRange, getEurRate } from "./fetchers.server";
 import { fetchShopifyMonthlyFromDb } from "./shopify-db.server";
 import { fetchLoopMarketLight } from "./loop-db.server";
@@ -167,6 +168,45 @@ let subsInflight: Promise<Map<string, SubscriberStats>> | null = null;
 const monthlyCache: { value: any[] | null; error: string | null; fetchedAt: number } =
   { value: null, error: null, fetchedAt: 0 };
 let monthlyInflight: Promise<any[] | null> | null = null;
+const FORECAST_RESULT_TTL_MS = 10 * 60 * 1000;
+const forecastCache = new Map<string, { value: RevenueForecast; fetchedAt: number }>();
+const forecastInflight = new Map<string, Promise<RevenueForecast>>();
+
+function buildForecastCacheKey(opts?: {
+  startMonth?: string;
+  horizonMonths?: number;
+  assumptions?: Partial<ForecastAssumptions>;
+}) {
+  return JSON.stringify({
+    startMonth: opts?.startMonth ?? null,
+    horizonMonths: Math.min(24, Math.max(1, opts?.horizonMonths ?? 12)),
+    assumptions: {
+      monthlyGrowthRate: opts?.assumptions?.monthlyGrowthRate ?? 0,
+      churnRateOverride: opts?.assumptions?.churnRateOverride ?? null,
+      subscriberRateOverride: opts?.assumptions?.subscriberRateOverride ?? null,
+    },
+  });
+}
+
+async function readCachedForecast(key: string): Promise<RevenueForecast | null> {
+  const memory = forecastCache.get(key);
+  if (memory && Date.now() - memory.fetchedAt < FORECAST_RESULT_TTL_MS) {
+    return memory.value;
+  }
+
+  const persisted = await readCache("forecast", key);
+  if (!persisted?.payload) return null;
+  if (ageMinutes(persisted.fetchedAt) > FORECAST_RESULT_TTL_MS / 60_000) return null;
+
+  const value = persisted.payload as RevenueForecast;
+  forecastCache.set(key, { value, fetchedAt: new Date(persisted.fetchedAt).getTime() });
+  return value;
+}
+
+async function persistForecastCache(key: string, value: RevenueForecast) {
+  forecastCache.set(key, { value, fetchedAt: Date.now() });
+  await writeCache("forecast", key, value);
+}
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -831,6 +871,13 @@ export async function buildRevenueForecast(opts?: {
   horizonMonths?: number;
   assumptions?: Partial<ForecastAssumptions>;
 }): Promise<RevenueForecast> {
+  const cacheKey = buildForecastCacheKey(opts);
+  const cached = await readCachedForecast(cacheKey);
+  if (cached) return cached;
+
+  const inFlight = forecastInflight.get(cacheKey);
+  if (inFlight) return await inFlight;
+
   const horizon = Math.min(24, Math.max(1, opts?.horizonMonths ?? 12));
   const now = new Date();
   // Default start = next month (a true forward forecast).
@@ -851,90 +898,102 @@ export async function buildRevenueForecast(opts?: {
     return todayIso(d);
   })();
 
-  // All loaders run in parallel. Each has its own timeout + cache;
-  // failures don't take the whole forecast down — they just degrade that
-  // section and surface in the diagnostics strip.
-  const [cohortR, twResult, monthlyR, subsR, historyR] = await withTimeout(
-    Promise.all([
-      loadCohortLtvCached(),
-      fetchTripleWhaleCached(twFromDate, twToDate),
-      loadShopifyMonthlyCached(),
-      loadSubscriberStatsCached(twFromDate, twToDate),
-      loadMarketHistory([...FORECAST_MARKETS]).catch((err) => {
-        console.warn("[forecast] history failed:", err?.message ?? err);
-        return { series: [], diagnostics: [], fetchedAt: new Date().toISOString() };
-      }),
-    ]),
-    FORECAST_OUTER_TIMEOUT_MS,
-    "Revenue forecast (outer)",
-  );
-
-  const historyByMarket = new Map<string, MarketHistorySeries>();
-  for (const s of historyR.series) historyByMarket.set(s.market, s);
-
-  const cohort = cohortR.value;
-  const subsByMarket = subsR.value;
-  const shopifyMonthly = monthlyR.value;
-
-  const twByMarket = new Map<string, any>();
-  for (const r of twResult.rows ?? []) {
-    if (r?.market) twByMarket.set(String(r.market), r);
-  }
-
-  const markets: MarketForecast[] = [];
-  for (const market of FORECAST_MARKETS) {
-    markets.push(
-      computeMarketForecast(
-        market,
-        startMonth,
-        horizon,
-        twByMarket.get(market) ?? null,
-        cohort.get(market) ?? null,
-        shopifyMonthly,
-        subsByMarket.get(market) ?? null,
-        historyByMarket.get(market) ?? null,
-        assumptions,
-      ),
+  const task = (async () => {
+    // All loaders run in parallel. Each has its own timeout + cache;
+    // failures don't take the whole forecast down — they just degrade that
+    // section and surface in the diagnostics strip.
+    const [cohortR, twResult, monthlyR, subsR, historyR] = await withTimeout(
+      Promise.all([
+        loadCohortLtvCached(),
+        fetchTripleWhaleCached(twFromDate, twToDate),
+        loadShopifyMonthlyCached(),
+        loadSubscriberStatsCached(twFromDate, twToDate),
+        loadMarketHistory([...FORECAST_MARKETS]).catch((err) => {
+          console.warn("[forecast] history failed:", err?.message ?? err);
+          return { series: [], diagnostics: [], fetchedAt: new Date().toISOString() };
+        }),
+      ]),
+      FORECAST_OUTER_TIMEOUT_MS,
+      "Revenue forecast (outer)",
     );
+
+    const historyByMarket = new Map<string, MarketHistorySeries>();
+    for (const s of historyR.series) historyByMarket.set(s.market, s);
+
+    const cohort = cohortR.value;
+    const subsByMarket = subsR.value;
+    const shopifyMonthly = monthlyR.value;
+
+    const twByMarket = new Map<string, any>();
+    for (const r of twResult.rows ?? []) {
+      if (r?.market) twByMarket.set(String(r.market), r);
+    }
+
+    const markets: MarketForecast[] = [];
+    for (const market of FORECAST_MARKETS) {
+      markets.push(
+        computeMarketForecast(
+          market,
+          startMonth,
+          horizon,
+          twByMarket.get(market) ?? null,
+          cohort.get(market) ?? null,
+          shopifyMonthly,
+          subsByMarket.get(market) ?? null,
+          historyByMarket.get(market) ?? null,
+          assumptions,
+        ),
+      );
+    }
+
+    const diagnostics: SourceDiagnostic[] = [
+      {
+        name: "Triple Whale (30d)",
+        ok: twResult.rows.length > 0 && !twResult.error,
+        cached: false,
+        error: twResult.error,
+      },
+      {
+        name: "Cohort LTV",
+        ok: cohort.size > 0 && !cohortR.error,
+        cached: cohortR.cached,
+        error: cohortR.error,
+      },
+      {
+        name: "Shopify monthly",
+        ok: Array.isArray(shopifyMonthly) && shopifyMonthly.length > 0 && !monthlyR.error,
+        cached: monthlyR.cached,
+        error: monthlyR.error,
+      },
+      {
+        name: "Loop + Juo subscribers",
+        ok: subsByMarket.size > 0 && !subsR.error,
+        cached: subsR.cached,
+        error: subsR.error,
+      },
+      ...((historyR.diagnostics ?? []) as SourceDiagnostic[]),
+    ];
+
+    const result = {
+      startMonth,
+      horizonMonths: horizon,
+      assumptions,
+      markets,
+      fetchedAt: new Date().toISOString(),
+      twWarning: twResult.error
+        ? `Triple Whale unreachable (${twResult.error}). AOV/MRR/churn defaulted.`
+        : null,
+      diagnostics,
+    };
+
+    await persistForecastCache(cacheKey, result);
+    return result;
+  })();
+
+  forecastInflight.set(cacheKey, task);
+  try {
+    return await task;
+  } finally {
+    forecastInflight.delete(cacheKey);
   }
-
-  const diagnostics: SourceDiagnostic[] = [
-    {
-      name: "Triple Whale (30d)",
-      ok: twResult.rows.length > 0 && !twResult.error,
-      cached: false,
-      error: twResult.error,
-    },
-    {
-      name: "Cohort LTV",
-      ok: cohort.size > 0 && !cohortR.error,
-      cached: cohortR.cached,
-      error: cohortR.error,
-    },
-    {
-      name: "Shopify monthly",
-      ok: Array.isArray(shopifyMonthly) && shopifyMonthly.length > 0 && !monthlyR.error,
-      cached: monthlyR.cached,
-      error: monthlyR.error,
-    },
-    {
-      name: "Loop + Juo subscribers",
-      ok: subsByMarket.size > 0 && !subsR.error,
-      cached: subsR.cached,
-      error: subsR.error,
-    },
-    ...((historyR.diagnostics ?? []) as SourceDiagnostic[]),
-  ];
-
-  return {
-    startMonth,
-    horizonMonths: horizon,
-    assumptions,
-    markets,
-    fetchedAt: new Date().toISOString(),
-    twWarning: twResult.error
-      ? `Triple Whale unreachable (${twResult.error}). AOV/MRR/churn defaulted.`
-      : null,
-    diagnostics,
-  };
 }

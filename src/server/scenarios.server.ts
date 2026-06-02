@@ -8,6 +8,10 @@
  */
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
+const SCENARIOS_CACHE_TTL_MS = 60_000;
+let scenariosCache: { value: ScenarioRow[]; fetchedAt: number } | null = null;
+let scenariosInflight: Promise<ScenarioRow[]> | null = null;
+
 export type ScenarioAssumptions = {
   monthlyGrowthRate?: number;
   churnRateOverride?: number | null;
@@ -68,6 +72,12 @@ function rowToScenario(r: any): ScenarioRow {
 }
 
 export async function listScenarios(): Promise<ScenarioRow[]> {
+  if (scenariosCache && Date.now() - scenariosCache.fetchedAt < SCENARIOS_CACHE_TTL_MS) {
+    return scenariosCache.value;
+  }
+  if (scenariosInflight) return await scenariosInflight;
+
+  const task = (async () => {
   const { data, error } = await (supabaseAdmin as any)
     .from("forecast_scenarios")
     .select("id, name, description, assumptions, events, snapshot, created_at, updated_at")
@@ -77,7 +87,17 @@ export async function listScenarios(): Promise<ScenarioRow[]> {
     console.warn("[scenarios] list:", error.message);
     return [];
   }
-  return (data ?? []).map(rowToScenario);
+    return (data ?? []).map(rowToScenario);
+  })();
+
+  scenariosInflight = task;
+  try {
+    const rows = await task;
+    scenariosCache = { value: rows, fetchedAt: Date.now() };
+    return rows;
+  } finally {
+    scenariosInflight = null;
+  }
 }
 
 export async function getScenario(id: string): Promise<ScenarioRow | null> {
@@ -126,6 +146,7 @@ export async function upsertScenario(input: {
     .select("id, name, description, assumptions, events, snapshot, created_at, updated_at")
     .maybeSingle();
   if (error) return { ok: false, error: error.message };
+  scenariosCache = null;
   return { ok: true, scenario: data ? rowToScenario(data) : undefined };
 }
 
@@ -135,5 +156,6 @@ export async function deleteScenario(id: string): Promise<{ ok: boolean; error?:
     .delete()
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
+  scenariosCache = null;
   return { ok: true };
 }
