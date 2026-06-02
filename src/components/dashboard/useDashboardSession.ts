@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
-
-const ALLOWED_DOMAINS = ["zapply.nl", "codestrokes.com"];
+import { isAllowedEmail } from "@/lib/auth-allowlist";
 
 function isPreviewEnvironment() {
   if (typeof window === "undefined") return false;
@@ -64,8 +63,8 @@ export function useDashboardSession(): { user: DashboardUser | null; loading: bo
       return;
     }
     if (!previewBypass) {
-      const email = (session.user.email ?? "").toLowerCase();
-      const ok = ALLOWED_DOMAINS.some((d) => email.endsWith(`@${d}`));
+      const email = session.user.email ?? "";
+      const ok = isAllowedEmail(email);
       if (!ok) {
         supabase.auth.signOut().then(() =>
           navigate({ to: "/login", search: { error: "unauthorized_domain" } })

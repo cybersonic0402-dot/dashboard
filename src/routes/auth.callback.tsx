@@ -1,12 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { isAllowedEmail } from "@/lib/auth-allowlist";
 
 export const Route = createFileRoute("/auth/callback")({
   component: AuthCallback,
 });
-
-const ALLOWED_DOMAINS = ["zapply.nl", "codestrokes.com"];
 
 function AuthCallback() {
   const navigate = useNavigate();
@@ -25,8 +24,8 @@ function AuthCallback() {
         return;
       }
 
-      const email = (session.user.email ?? "").toLowerCase();
-      const allowed = ALLOWED_DOMAINS.some((d) => email.endsWith(`@${d}`));
+      const email = session.user.email ?? "";
+      const allowed = isAllowedEmail(email);
 
       if (!allowed) {
         setMessage("Access denied. Signing out…");

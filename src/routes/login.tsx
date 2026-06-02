@@ -1,5 +1,6 @@
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
+import { getAllowedAccountsLabel } from "@/lib/auth-allowlist";
 
 export const Route = createFileRoute("/login")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -19,7 +20,7 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const { error } = useSearch({ from: "/login" });
-  const allowedDomainsLabel = "@zapply.nl and @codestrokes.com";
+  const allowedAccountsLabel = getAllowedAccountsLabel();
 
   async function signInWithGoogle() {
     await supabase.auth.signInWithOAuth({
@@ -39,7 +40,7 @@ function LoginPage() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&family=Geist:wght@400;500;600;700&display=swap');`}</style>
 
       <div className="w-full max-w-sm rounded-2xl border border-neutral-200 bg-white shadow-sm overflow-hidden">
-        <div className="h-[3px] w-full bg-[#0d1d3d]" />
+        <div className="h-0.75 w-full bg-[#0d1d3d]" />
 
         <div className="px-8 py-10 flex flex-col items-center gap-6">
           <div className="flex flex-col items-center gap-3">
@@ -76,9 +77,7 @@ function LoginPage() {
             </h1>
             <p className="mt-1 text-[13px] text-neutral-500">
               Restricted to{" "}
-              <span className="font-medium text-neutral-700">
-                {allowedDomainsLabel}
-              </span>{" "}
+              <span className="font-medium text-neutral-700">{allowedAccountsLabel}</span>{" "}
               accounts
             </p>
           </div>
@@ -86,7 +85,7 @@ function LoginPage() {
           {error && (
             <div className="w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700">
               {error === "unauthorized_domain"
-                ? "Access denied. Only @zapply.nl Google accounts are allowed."
+                ? "Access denied. Your account is not on the allowed sign-in list."
                 : "Authentication failed. Please try again."}
             </div>
           )}

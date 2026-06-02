@@ -8,8 +8,7 @@ import { createMiddleware } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { createClient } from "@supabase/supabase-js";
 import { resolveSupabasePublishableKey, resolveSupabaseUrl } from "./supabase-env.server";
-
-const ALLOWED_DOMAINS = ["zapply.nl", "codestrokes.com"];
+import { isAllowedEmail } from "@/lib/auth-allowlist";
 
 function isPreviewHost(host: string): boolean {
   return (
@@ -51,10 +50,9 @@ async function validateRequestUser(requireAdmin: boolean) {
     if (error || !data?.claims) {
       throw new Response("Unauthorized", { status: 401 });
     }
-    const email = String((data.claims as any).email ?? "").toLowerCase();
+    const email = String((data.claims as any).email ?? "");
     const userId = String((data.claims as any).sub ?? "");
-    const ok =
-      email && ALLOWED_DOMAINS.some((d) => email.endsWith(`@${d}`));
+    const ok = isAllowedEmail(email);
     if (!ok) throw new Response("Forbidden", { status: 403 });
 
     if (requireAdmin) {
