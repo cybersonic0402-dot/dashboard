@@ -21,14 +21,28 @@ import {
 } from "./fetchers.server";
 import { syncAllLoop } from "./loop-sync.server";
 import { fetchPicqerInventory } from "./picqer.server";
+import { isRemoteLoopSyncConfigured, triggerRemoteLoopSync } from "./loop-remote.server";
 
-// Loop job wrapper: refresh Supabase UK_loop/US_loop from the Loop API,
-// then recompute dashboard payload from the DB tables.
+// Loop job wrapper: refresh Supabase UK_loop/US_loop, then recompute the
+// dashboard payload from the DB tables.
+//
+// The UK store alone is ~52k rows and the full Loop pagination takes 10–15 min,
+// which blows Vercel's 300s function limit — running it here produced endless
+// "partial" sync runs that never completed. So when a backend is configured
+// (BACKEND_SYNC_URL / LOOP_SYNC_SERVICE_URL), we hand the sync to Railway
+// (fire-and-forget, it runs to completion with no timeout) and just read the
+// current DB rows. Only fall back to the in-process sync when no backend exists.
 async function fetchLoopFull() {
-  try {
-    await syncAllLoop();
-  } catch (err) {
-    console.error("[sync] loop DB sync failed (continuing with existing DB rows):", err);
+  if (isRemoteLoopSyncConfigured()) {
+    triggerRemoteLoopSync().catch((err) =>
+      console.error("[sync] remote loop sync trigger failed:", err),
+    );
+  } else {
+    try {
+      await syncAllLoop();
+    } catch (err) {
+      console.error("[sync] loop DB sync failed (continuing with existing DB rows):", err);
+    }
   }
   return fetchLoopRaw();
 }

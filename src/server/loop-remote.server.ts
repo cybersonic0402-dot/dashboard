@@ -10,8 +10,30 @@
 
 type Market = "UK" | "US";
 
+// The Loop microservice is now the same Railway backend that runs all the
+// other heavy jobs, so accept BACKEND_SYNC_URL / SYNC_SECRET (the unified env)
+// first and fall back to the legacy LOOP_SYNC_SERVICE_* names.
+function remoteBaseUrl(): string | null {
+  return (
+    process.env.BACKEND_SYNC_URL ||
+    process.env.LOOP_SYNC_SERVICE_URL ||
+    process.env.VITE_BACKEND_SYNC_URL ||
+    (import.meta as any).env?.VITE_BACKEND_SYNC_URL ||
+    null
+  );
+}
+
+function remoteSecret(): string | null {
+  return (
+    process.env.SYNC_SECRET ||
+    process.env.LOOP_SYNC_SERVICE_SECRET ||
+    process.env.BACKEND_SYNC_SECRET ||
+    null
+  );
+}
+
 export function isRemoteLoopSyncConfigured(): boolean {
-  return !!process.env.LOOP_SYNC_SERVICE_URL;
+  return !!remoteBaseUrl();
 }
 
 export async function triggerRemoteLoopSync(
@@ -23,9 +45,9 @@ export async function triggerRemoteLoopSync(
   url: string;
   market: Market | "all";
 }> {
-  const base = process.env.LOOP_SYNC_SERVICE_URL;
-  if (!base) throw new Error("LOOP_SYNC_SERVICE_URL is not set");
-  const secret = process.env.LOOP_SYNC_SERVICE_SECRET;
+  const base = remoteBaseUrl();
+  if (!base) throw new Error("No backend sync URL set (BACKEND_SYNC_URL / LOOP_SYNC_SERVICE_URL)");
+  const secret = remoteSecret();
 
   const url = new URL("/sync", base);
   if (market) url.searchParams.set("market", market);
