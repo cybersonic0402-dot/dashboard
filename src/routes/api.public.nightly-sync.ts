@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { syncAllShopifyOrders, snapshotSubscriptions } from "@/server/order-sync.server";
 import { runAll } from "@/server/sync.server";
 import { syncAllLoop } from "@/server/loop-sync.server";
+import { triggerBackendSync } from "@/server/backend-sync.server";
 
 // POST /api/public/nightly-sync
 //   Public endpoint called by pg_cron every night. Does three things:
@@ -19,6 +20,29 @@ export const Route = createFileRoute("/api/public/nightly-sync")({
       POST: async ({ request }) => {
         const startedAt = new Date().toISOString();
         const { searchParams } = new URL(request.url);
+
+        // Preferred path: delegate the whole heavy sweep to the Railway backend,
+        // which has no request timeout. Returns immediately (backend runs it in
+        // the background). Set BACKEND_SYNC_URL (+ SYNC_SECRET) to enable.
+        // Pass ?inline=1 to force the legacy in-process path for debugging.
+        if (searchParams.get("inline") !== "1") {
+          const forwarded = await triggerBackendSync("/sync/nightly");
+          if (forwarded.forwarded) {
+            return Response.json({
+              ok: forwarded.ok,
+              startedAt,
+              delegatedTo: "railway-backend",
+              backendStatus: forwarded.status,
+              backend: forwarded.body ?? forwarded.error ?? null,
+              message: forwarded.ok
+                ? "Nightly sweep handed off to the Railway backend (running in background)."
+                : "Backend reachable but rejected the job — see backendStatus/backend.",
+            });
+          }
+          // forwarded === false → BACKEND_SYNC_URL not configured; fall through
+          // to the legacy in-process implementation below.
+        }
+
         const pages = Number(searchParams.get("pages") ?? "1");
         const orders = await syncAllShopifyOrders(pages);
         const hasMore = orders.some((store) => store.hasMore);

@@ -1,6 +1,27 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { runAll, runAllInBackground } from "@/server/sync.server";
 import { verifySyncSecret } from "@/server/sync-auth.server";
+import { triggerBackendSync } from "@/server/backend-sync.server";
+
+// Hand the full data_cache refresh to the Railway backend when configured.
+// Returns the delegated response, or null when no backend is set (caller then
+// runs the legacy in-process path). `?inline=1` forces the in-process path.
+async function delegateDashboardRefresh(request: Request, startedAt: string) {
+  const { searchParams } = new URL(request.url);
+  if (searchParams.get("inline") === "1") return null;
+  const forwarded = await triggerBackendSync("/sync/dashboard");
+  if (!forwarded.forwarded) return null;
+  return Response.json({
+    ok: forwarded.ok,
+    delegatedTo: "railway-backend",
+    backendStatus: forwarded.status,
+    backend: forwarded.body ?? forwarded.error ?? null,
+    startedAt,
+    message: forwarded.ok
+      ? "Dashboard cache refresh handed off to the Railway backend (running in background)."
+      : "Backend reachable but rejected the job — see backendStatus/backend.",
+  });
+}
 
 // POST /api/public/sync
 //   Public-prefixed sync trigger. Bypasses auth on published deployments
@@ -20,6 +41,9 @@ export const Route = createFileRoute("/api/public/sync")({
         const { searchParams } = new URL(request.url);
         const isAsync = searchParams.get("async") === "1";
         const startedAt = new Date().toISOString();
+
+        const delegated = await delegateDashboardRefresh(request, startedAt);
+        if (delegated) return delegated;
 
         if (isAsync) {
           runAllInBackground();
@@ -48,6 +72,9 @@ export const Route = createFileRoute("/api/public/sync")({
         const { searchParams } = new URL(request.url);
         const isSync = searchParams.get("async") === "0" || searchParams.get("wait") === "1";
         const startedAt = new Date().toISOString();
+
+        const delegated = await delegateDashboardRefresh(request, startedAt);
+        if (delegated) return delegated;
 
         if (isSync) {
           const results = await runAll();

@@ -7,6 +7,7 @@ import {
 } from "@/server/fetchers.server";
 import { runAllInBackground } from "@/server/sync.server";
 import { verifyAllowedUser } from "@/server/user-auth.server";
+import { triggerBackendSync } from "@/server/backend-sync.server";
 
 // POST /api/sync
 //   Fires the full sync in the background and returns immediately (~50ms).
@@ -50,6 +51,26 @@ export const Route = createFileRoute("/api/sync")({
           });
         }
 
+        // Prefer the Railway backend (no request timeout, doesn't drop the
+        // background promise like Vercel/Workers do). Falls back to the legacy
+        // in-process background run when BACKEND_SYNC_URL isn't configured.
+        const startedAt = new Date().toISOString();
+        if (searchParams.get("inline") !== "1") {
+          const forwarded = await triggerBackendSync("/sync/dashboard");
+          if (forwarded.forwarded) {
+            return Response.json({
+              ok: forwarded.ok,
+              started: forwarded.ok,
+              delegatedTo: "railway-backend",
+              backendStatus: forwarded.status,
+              message: forwarded.ok
+                ? "Sync handed off to the Railway backend. Refresh in a moment to see new data."
+                : "Backend rejected the job — see backendStatus.",
+              startedAt,
+            });
+          }
+        }
+
         // Fire-and-forget — runAllInBackground returns void synchronously.
         runAllInBackground();
         return Response.json({
@@ -57,7 +78,7 @@ export const Route = createFileRoute("/api/sync")({
           started: true,
           message:
             "Sync started in background. Refresh the dashboard in a moment to see new data.",
-          startedAt: new Date().toISOString(),
+          startedAt,
         });
       },
     },
