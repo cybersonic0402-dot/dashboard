@@ -125,6 +125,37 @@ export async function fetchShopifyMonthlyFromDb(monthsBack = 12) {
       new Date("1 " + b.replace("'", "20")).getTime(),
   );
 
+  const ratePromises: Array<Promise<{ currency: string; start: string; end: string; rate: number }>> = [];
+
+  for (const month of sortedMonths) {
+    const monthDate = new Date("1 " + month.replace("'", "20"));
+    const monthStart = `${monthDate.getUTCFullYear()}-${String(monthDate.getUTCMonth() + 1).padStart(2, "0")}-01`;
+    const monthEnd = new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0))
+      .toISOString()
+      .split("T")[0];
+
+    for (const r of byMonth.get(month)!) {
+      const code = String(r.store_code);
+      const currency = r.currency || MARKET_CURRENCY[code as StoreCode] || "EUR";
+      if (currency !== "EUR") {
+        ratePromises.push(
+          eurRate(currency, monthStart, monthEnd).then((rate) => ({
+            currency,
+            start: monthStart,
+            end: monthEnd,
+            rate,
+          })),
+        );
+      }
+    }
+  }
+
+  const rates = await Promise.all(ratePromises);
+  const rateMap = new Map<string, number>();
+  for (const item of rates) {
+    rateMap.set(`${item.currency}|${item.start}|${item.end}`, item.rate);
+  }
+
   const out: any[] = [];
   for (const month of sortedMonths) {
     const monthDate = new Date("1 " + month.replace("'", "20"));
@@ -140,7 +171,7 @@ export async function fetchShopifyMonthlyFromDb(monthsBack = 12) {
     for (const r of byMonth.get(month)!) {
       const code = String(r.store_code);
       const currency = r.currency || MARKET_CURRENCY[code as StoreCode] || "EUR";
-      const rate = await eurRate(currency, monthStart, monthEnd);
+      const rate = currency === "EUR" ? 1 : (rateMap.get(`${currency}|${monthStart}|${monthEnd}`) ?? 1);
       const rev = +(Number(r.revenue) * rate).toFixed(2);
       const rfn = +(Number(r.refunds) * rate).toFixed(2);
       byMarket[code] = { revenue: rev, orders: Number(r.orders), refunds: rfn };

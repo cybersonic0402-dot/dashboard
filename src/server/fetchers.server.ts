@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Server-side data fetchers — called directly from page.tsx (no internal HTTP round-trips).
  * Each fetcher returns null when the source is not configured or errors.
  */
@@ -842,6 +842,78 @@ export async function getEurRate(currency: string, start: string, end: string): 
   // next call retries Frankfurter.
   task.catch(() => fxCache.delete(key));
   return task;
+}
+
+export async function getEurRatesForDates(
+  currency: string,
+  dates: string[],
+): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+  if (currency === "EUR") {
+    for (const d of dates) result[d] = 1;
+    return result;
+  }
+  if (dates.length === 0) return result;
+
+  const sortedDates = [...dates].sort();
+  const start = sortedDates[0];
+  const end = sortedDates[sortedDates.length - 1];
+
+  try {
+    const path = start === end ? start : `${start}..${end}`;
+    const url = `https://api.frankfurter.dev/v1/${path}?base=${currency}&symbols=EUR`;
+    const res = await fetch(url, { cache: "no-store", redirect: "follow" });
+    if (res.ok) {
+      const data = await res.json();
+      const rates = data.rates ?? {};
+
+      if (start === end) {
+        const val = toNumber(rates.EUR);
+        const rate = val !== null && val > 0 ? val : (fxLastGood.get(currency)?.rate ?? 1);
+        result[start] = rate;
+        fxLastGood.set(currency, { rate, at: Date.now() });
+        return result;
+      }
+
+      for (const d of dates) {
+        let current = d;
+        let rate: number | null = null;
+        for (let i = 0; i < 7; i++) {
+          const dayRateObj = rates[current];
+          if (dayRateObj) {
+            const val = toNumber(dayRateObj.EUR);
+            if (val !== null && val > 0) {
+              rate = val;
+              break;
+            }
+          }
+          const parts = current.split("-").map(Number);
+          const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+          dt.setUTCDate(dt.getUTCDate() - 1);
+          current = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+        }
+
+        if (rate !== null) {
+          result[d] = rate;
+          fxLastGood.set(currency, { rate, at: Date.now() });
+        } else {
+          const lkg = fxLastGood.get(currency);
+          result[d] = lkg?.rate ?? 1;
+        }
+      }
+      return result;
+    } else {
+      console.warn(`FX range ${currency}->EUR: HTTP ${res.status} from ${url}`);
+    }
+  } catch (err: any) {
+    console.warn(`FX range ${currency}->EUR failed:`, err?.message);
+  }
+
+  const lkg = fxLastGood.get(currency);
+  for (const d of dates) {
+    result[d] = lkg?.rate ?? 1;
+  }
+  return result;
 }
 
 function tripleWhaleTodayHour(): number {

@@ -17,7 +17,7 @@
  * change second-to-second.
  */
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { getEurRate } from "./fetchers.server";
+import { getEurRate, getEurRatesForDates } from "./fetchers.server";
 
 const HISTORY_TTL_MS = 10 * 60 * 1000;
 
@@ -294,6 +294,29 @@ export async function loadMarketHistory(markets: string[]): Promise<HistoryResul
   const loopByKey = new Map<string, LoopMonth>();
   for (const r of loopR.value) loopByKey.set(`${r.market}|${r.monthIso}`, r);
 
+  // Pre-fetch FX rates for all currencies and dates we need to avoid sequential requests
+  const fxRatesMap = new Map<string, Record<string, number>>();
+  const nonEurMarkets = markets.filter((m) => {
+    const currency = MARKET_CURRENCY[m] ?? "EUR";
+    return currency !== "EUR";
+  });
+
+  await Promise.all(
+    nonEurMarkets.map(async (market) => {
+      const currency = MARKET_CURRENCY[market];
+      const datesSet = new Set<string>();
+      for (const r of shopifyR.value) if (r.storeCode === market) datesSet.add(r.monthIso);
+      for (const r of newCustR.value) if (r.storeCode === market) datesSet.add(r.monthIso);
+      for (const r of loopR.value) if (r.market === market) datesSet.add(r.monthIso);
+      
+      const dates = Array.from(datesSet);
+      if (dates.length > 0) {
+        const rates = await getEurRatesForDates(currency, dates);
+        fxRatesMap.set(currency, rates);
+      }
+    }),
+  );
+
   // Union of months we have any data for, per market
   const series: MarketHistorySeries[] = [];
   for (const market of markets) {
@@ -310,8 +333,8 @@ export async function loadMarketHistory(markets: string[]): Promise<HistoryResul
       const s = shopByKey.get(`${market}|${iso}`);
       const nc = ncByKey.get(`${market}|${iso}`);
       const lp = loopByKey.get(`${market}|${iso}`);
-      // FX → EUR using start-of-month rate (cheap, cached upstream).
-      const fx = currency === "EUR" ? 1 : await getEurRate(currency, iso, iso).catch(() => 1);
+      // FX → EUR using pre-fetched rate.
+      const fx = currency === "EUR" ? 1 : (fxRatesMap.get(currency)?.[iso] ?? 1);
       const netRevenueEur = +(((s?.netRevenue ?? 0) * fx).toFixed(2));
       const acquisitionRevenueEur = +(((nc?.acquisitionRevenue ?? 0) * fx).toFixed(2));
       const mrrEur = lp ? +((lp.mrr * fx).toFixed(2)) : null;
