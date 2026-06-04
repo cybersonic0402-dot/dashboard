@@ -208,6 +208,31 @@ async function persistForecastCache(key: string, value: RevenueForecast) {
   await writeCache("forecast", key, value);
 }
 
+/**
+ * Read a previously-computed forecast from cache **regardless of age**.
+ *
+ * The full `buildRevenueForecast` compute is too heavy for Vercel's 300s
+ * function limit (cohort LTV RPC over the whole orders table + live Triple
+ * Whale). The Railway backend precomputes it on a schedule and persists it
+ * here, so the page can serve a slightly-stale-but-instant payload instead of
+ * recomputing live (which 504s). Returns null only when nothing was ever
+ * computed for this key.
+ */
+export async function readForecastAnyAge(opts?: {
+  startMonth?: string;
+  horizonMonths?: number;
+  assumptions?: Partial<ForecastAssumptions>;
+}): Promise<RevenueForecast | null> {
+  const key = buildForecastCacheKey(opts);
+  const memory = forecastCache.get(key);
+  if (memory) return memory.value;
+  const persisted = await readCache("forecast", key);
+  if (!persisted?.payload) return null;
+  const value = persisted.payload as RevenueForecast;
+  forecastCache.set(key, { value, fetchedAt: new Date(persisted.fetchedAt).getTime() });
+  return value;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,

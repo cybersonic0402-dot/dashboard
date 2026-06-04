@@ -29,7 +29,8 @@ import {
   type Channel,
   type Market,
 } from "./channel-pacing.server";
-import { buildRevenueForecast } from "./revenue-forecast.server";
+import { buildRevenueForecast, readForecastAnyAge } from "./revenue-forecast.server";
+import { triggerBackendSync } from "./backend-sync.server";
 import {
   listScenarios,
   getScenario,
@@ -895,16 +896,52 @@ export const getRevenueForecastFn = createServerFn({ method: "POST" })
     return out;
   })
   .handler(async ({ data }) => {
+    const opts = {
+      startMonth: data.startMonth,
+      horizonMonths: data.horizonMonths,
+      assumptions: data.assumptions,
+    };
+
+    // 1) Cache-first. The Railway backend precomputes this forecast on a
+    //    schedule and persists it to data_cache, so we serve it instantly
+    //    (even slightly stale) rather than recomputing live — the live compute
+    //    is too heavy for Vercel's 300s function limit and was 504-ing.
     try {
-      const result = await buildRevenueForecast({
-        startMonth: data.startMonth,
-        horizonMonths: data.horizonMonths,
-        assumptions: data.assumptions,
-      });
-      return { ok: true as const, ...result };
+      const cached = await readForecastAnyAge(opts);
+      if (cached) return { ok: true as const, ...cached, servedFromCache: true };
     } catch (err: any) {
+      console.warn("getRevenueForecast cache read failed:", err?.message);
+    }
+
+    // 2) Cache miss. Compute inline, but under a HARD time budget so this
+    //    request can never run into Vercel's 300s kill. buildRevenueForecast
+    //    keeps running + persists in the background even if we stop waiting,
+    //    so a subsequent request hits the cache. We also ask the backend to
+    //    (re)compute so the warm cache is restored quickly.
+    const COMPUTE_BUDGET_MS = 25_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        buildRevenueForecast(opts),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("__forecast_budget__")), COMPUTE_BUDGET_MS);
+        }),
+      ]);
+      return { ok: true as const, ...(result as Awaited<ReturnType<typeof buildRevenueForecast>>) };
+    } catch (err: any) {
+      if (err?.message === "__forecast_budget__") {
+        triggerBackendSync("/sync/forecast").catch(() => {});
+        return {
+          ok: false as const,
+          computing: true as const,
+          error:
+            "Forecast is being prepared on the server (large dataset). Refresh in a minute.",
+        };
+      }
       console.error("getRevenueForecast failed:", err?.message);
       return { ok: false as const, error: err?.message ?? "Forecast failed" };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   });
 

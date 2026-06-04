@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -151,6 +151,8 @@ function RevenueForecastPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedMarket, setSelectedMarket] = useState<Market | "ALL">("ALL");
 
+  const retryRef = useRef(0);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -172,8 +174,15 @@ function RevenueForecastPage() {
       if (!res?.ok) {
         setError(res?.error ?? "Failed to compute forecast");
         setData(null);
+        // While the backend precomputes the forecast (cache miss), poll a few
+        // times so the page fills in automatically without a manual refresh.
+        if (res?.computing && retryRef.current < 6) {
+          retryRef.current += 1;
+          setTimeout(() => void load(), 20_000);
+        }
         return;
       }
+      retryRef.current = 0;
       setData({
         markets: res.markets as MarketForecast[],
         twWarning: res.twWarning ?? null,
