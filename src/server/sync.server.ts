@@ -22,6 +22,27 @@ import {
 import { syncAllLoop } from "./loop-sync.server";
 import { fetchPicqerInventory } from "./picqer.server";
 import { isRemoteLoopSyncConfigured, triggerRemoteLoopSync } from "./loop-remote.server";
+import { backendSyncBaseUrl, triggerBackendSync } from "./backend-sync.server";
+
+// When a Railway backend is configured, the dashboard must NEVER run the heavy
+// multi-provider sweep in-process — on Vercel that's a 5-minute, 300s-timeout
+// invocation hammering Triple Whale / Shopify / PayPal / etc. Instead we hand
+// the refresh to the backend (which has no timeout and a Redis-backed cache)
+// and the dashboard just reads cache. Throttled so render storms don't spam it.
+let lastBackendRefresh = 0;
+const BACKEND_REFRESH_THROTTLE_MS = 5 * 60_000;
+
+function delegateRefreshToBackend(): boolean {
+  if (!backendSyncBaseUrl()) return false; // no backend → caller runs in-process
+  const now = Date.now();
+  if (now - lastBackendRefresh > BACKEND_REFRESH_THROTTLE_MS) {
+    lastBackendRefresh = now;
+    triggerBackendSync("/sync/dashboard").catch((e) =>
+      console.error("[sync] backend dashboard refresh trigger failed:", e),
+    );
+  }
+  return true; // backend owns the refresh; do not run jobs in-process
+}
 
 // Loop job wrapper: refresh Supabase UK_loop/US_loop, then recompute the
 // dashboard payload from the DB tables.
@@ -300,6 +321,8 @@ export async function runAll(): Promise<Record<string, string>> {
 
 /** Fire-and-forget — caller does NOT await individual jobs. Uses waitUntil where available so Workers don't kill the promise. */
 export function runAllInBackground(): void {
+  // Prefer the backend — never run the full sweep in-process when configured.
+  if (delegateRefreshToBackend()) return;
   const p = runAll().catch((e) => console.error("[sync] runAll background error:", e));
   const ER = (globalThis as any).EdgeRuntime;
   if (ER && typeof ER.waitUntil === "function") {
@@ -315,6 +338,9 @@ export function runAllInBackground(): void {
  * Returns immediately. Safe to call on every dashboard render.
  */
 export function refreshStaleInBackground(cache: CacheMap): void {
+  // When a backend is configured, it owns syncing (scheduled + on-demand) and
+  // keeps data_cache fresh. The dashboard must not run any in-process fetches.
+  if (delegateRefreshToBackend()) return;
   for (const job of ALL_JOBS) {
     const entry = cache[`${job.provider}/${job.key}`];
     const age = ageMinutes(entry?.fetchedAt);
