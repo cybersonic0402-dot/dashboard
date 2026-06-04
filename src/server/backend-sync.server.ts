@@ -56,3 +56,37 @@ export async function triggerBackendSync(path: string): Promise<BackendTriggerRe
     return { forwarded: true, ok: false, status: 0, error: err?.message ?? String(err) };
   }
 }
+
+/**
+ * GET the Redis-backed dashboard cache from the backend (~2ms HGETALL).
+ * Returns null when no backend is configured, on any error, or on a non-2xx —
+ * the caller then falls back to reading Supabase directly. `timeoutMs` keeps a
+ * slow/unreachable backend from blocking the dashboard render.
+ */
+export async function fetchBackendCache<T = any>(
+  path = "/cache",
+  timeoutMs = 1500,
+): Promise<T | null> {
+  const base = backendSyncBaseUrl();
+  if (!base) return null;
+
+  const secret =
+    process.env.SYNC_SECRET ||
+    process.env.BACKEND_SYNC_SECRET ||
+    (import.meta as any).env?.VITE_BACKEND_SYNC_SECRET ||
+    null;
+  const headers: Record<string, string> = {};
+  if (secret) headers["X-Sync-Secret"] = String(secret);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}${path}`, { method: "GET", headers, signal: controller.signal });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

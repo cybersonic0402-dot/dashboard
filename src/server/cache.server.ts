@@ -1,6 +1,7 @@
 import { createClient as createSupabaseJS } from "@supabase/supabase-js";
 import { getRequestHeader } from "@tanstack/react-start/server";
 import { resolveSupabasePublishableKey, resolveSupabaseServiceKey, resolveSupabaseUrl } from "./supabase-env.server";
+import { fetchBackendCache } from "./backend-sync.server";
 
 // Resolve Supabase credentials with sensible fallbacks.
 // In the TanStack Worker runtime, only VITE_* vars are injected reliably;
@@ -145,6 +146,20 @@ export async function readCacheKeys(keys: Array<[string, string]>): Promise<Cach
  * Returns a map keyed by "provider/cache_key".
  */
 export async function readAllCache(): Promise<CacheMap> {
+  // Fast path: the Railway backend serves the whole cache from Redis (~2ms).
+  // Falls back to Supabase when BACKEND_SYNC_URL is unset or the backend is
+  // slow/unreachable (fetchBackendCache returns null on any failure/timeout).
+  const fromBackend = await fetchBackendCache<Record<string, CacheEntry>>("/cache");
+  if (fromBackend && Object.keys(fromBackend).length > 0) {
+    const map: CacheMap = {};
+    for (const [id, entry] of Object.entries(fromBackend)) {
+      map[id] = entry;
+      const sep = id.indexOf("/");
+      if (sep !== -1) remember(id.slice(0, sep), id.slice(sep + 1), entry);
+    }
+    return map;
+  }
+
   try {
     const { data, error } = await (requestClient() as any)
       .from("data_cache")
