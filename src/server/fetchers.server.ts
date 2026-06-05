@@ -999,44 +999,59 @@ async function fetchTripleWhaleShippingForShop(
   end: string,
   apiKey: string,
 ): Promise<number | null> {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15_000);
-    const res = await fetch("https://api.triplewhale.com/api/v2/orcabase/api/sql", {
-      method: "POST",
-      headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        period: { startDate: start, endDate: end },
-        shopId: shop,
-        query:
-          "SELECT SUM(shipping_costs) AS shipping_cost FROM orders_table WHERE platform = 'shopify'",
-      }),
-      signal: ctrl.signal,
-      cache: "no-store",
-    }).finally(() => clearTimeout(timer));
-    if (!res.ok) {
-      console.warn(`TW shipping ${market} ${res.status}`);
+  const body = JSON.stringify({
+    period: { startDate: start, endDate: end },
+    shopId: shop,
+    query: "SELECT SUM(shipping_costs) AS shipping_cost FROM orders_table WHERE platform = 'shopify'",
+  });
+  // TW's SQL endpoint rate-limits aggressively. Retry 429/5xx with exponential
+  // backoff (honoring Retry-After) so a transient limit doesn't drop the month.
+  const MAX_ATTEMPTS = 4;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15_000);
+      const res = await fetch("https://api.triplewhale.com/api/v2/orcabase/api/sql", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
+        body,
+        signal: ctrl.signal,
+        cache: "no-store",
+      }).finally(() => clearTimeout(timer));
+
+      if ((res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
+        const retryAfter = Number(res.headers.get("retry-after"));
+        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      if (!res.ok) {
+        console.warn(`TW shipping ${market} ${res.status}${attempt > 1 ? ` (after ${attempt} tries)` : ""}`);
+        return null;
+      }
+      const json: any = await res.json();
+      const rows: any[] =
+        (Array.isArray(json) ? json : null) ??
+        json?.data ?? json?.rows ?? json?.results ?? json?.result?.rows ?? [];
+      const first = rows[0];
+      if (!first) return 0;
+      const raw =
+        first.shipping_cost ?? first.ShippingCost ?? first.SHIPPING_COST ??
+        first.shipping_costs ?? first[Object.keys(first)[0]];
+      const num = toNumber(raw);
+      if (num == null) return null;
+      // TW's shipping_costs column is already EUR-normalized — no extra FX.
+      return +num.toFixed(2);
+    } catch (err: any) {
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
+        continue;
+      }
+      console.warn(`TW shipping ${market}:`, err?.message);
       return null;
     }
-    const json: any = await res.json();
-    // Response can be { data: [...] }, { rows: [...] } or { results: [...] }.
-    const rows: any[] =
-      (Array.isArray(json) ? json : null) ??
-      json?.data ?? json?.rows ?? json?.results ?? json?.result?.rows ?? [];
-    const first = rows[0];
-    if (!first) return 0;
-    const raw =
-      first.shipping_cost ?? first.ShippingCost ?? first.SHIPPING_COST ??
-      first.shipping_costs ?? first[Object.keys(first)[0]];
-    const num = toNumber(raw);
-    if (num == null) return null;
-    // Triple Whale's shipping_costs column is already normalized to EUR
-    // by TW for all shops — do NOT apply an additional FX conversion.
-    return +num.toFixed(2);
-  } catch (err: any) {
-    console.warn(`TW shipping ${market}:`, err?.message);
-    return null;
   }
+  return null;
 }
 
 // ─── Shopify Admin GraphQL — ShopifyQL Analytics: refunded_payments ────────
