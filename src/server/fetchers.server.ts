@@ -1236,17 +1236,17 @@ export async function fetchTripleWhaleShippingMonthly(monthsBack = 12) {
   const byMonth: Record<string, { total: number; byMarket: Record<string, number> }> = {};
   for (const p of periods) byMonth[p.label] = { total: 0, byMarket: {} };
 
-  // Sequential per period to avoid hammering the SQL endpoint.
+  // Fully sequential with a small gap — the TW SQL endpoint rate-limits bursts,
+  // so firing all markets per period in parallel triggered 429 storms.
   for (const p of periods) {
-    await Promise.all(
-      planned.map(async ({ market, shop }) => {
-        const v = await fetchTripleWhaleShippingForShop(shop, market, p.start, p.end, apiKey);
-        if (v != null) {
-          byMonth[p.label].byMarket[market] = v;
-          byMonth[p.label].total += v;
-        }
-      }),
-    );
+    for (const { market, shop } of planned) {
+      const v = await fetchTripleWhaleShippingForShop(shop, market, p.start, p.end, apiKey);
+      if (v != null) {
+        byMonth[p.label].byMarket[market] = v;
+        byMonth[p.label].total += v;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
   }
   return { ...byMonth, calcVersion: 2 };
 }
