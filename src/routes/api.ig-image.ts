@@ -37,6 +37,20 @@ export const Route = createFileRoute("/api/ig-image")({
         }
 
         try {
+          // When INSTAGRAM_PROXY_URL is set, route the CDN fetch through the
+          // same residential proxy used for live refresh — covers the case
+          // where IG's CDN blocks the datacenter IP (not just Referer). No
+          // proxy configured → direct fetch (fine for non-expired, public URLs).
+          let dispatcher: unknown;
+          const proxyUrl = process.env.INSTAGRAM_PROXY_URL;
+          if (proxyUrl) {
+            try {
+              const undici = await import("undici" as string);
+              dispatcher = new (undici as any).ProxyAgent(proxyUrl);
+            } catch {
+              /* undici unavailable — fall back to a direct fetch */
+            }
+          }
           const upstream = await fetch(target.toString(), {
             // Instagram's CDN only serves images when the request looks
             // like it came from a browser viewing instagram.com.
@@ -47,7 +61,8 @@ export const Route = createFileRoute("/api/ig-image")({
               Referer: "https://www.instagram.com/",
             },
             cache: "no-store",
-          });
+            ...(dispatcher ? { dispatcher } : {}),
+          } as any);
           if (!upstream.ok || !upstream.body) {
             return new Response(`upstream ${upstream.status}`, { status: 502 });
           }

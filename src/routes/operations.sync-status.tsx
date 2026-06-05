@@ -201,9 +201,21 @@ const CONNECTORS: Connector[] = [
 
 function aggregateStatus(rows: SourceRow[]): SourceRow["status"] {
   if (rows.length === 0) return "disconnected";
-  if (rows.some((r) => r.status === "error")) return "error";
-  if (rows.some((r) => r.status === "disconnected")) return "disconnected";
-  if (rows.some((r) => r.status === "degraded")) return "degraded";
+  // A source that has actually synced (has data + a sync timestamp, no hard
+  // error) is working — even if the backend marked it "disconnected" because it
+  // didn't find that provider's env creds in its own process. Treat data
+  // presence as the source of truth so connectors with real rows don't show
+  // a misleading "Disconnected".
+  const effective = rows.map((r): SourceRow["status"] => {
+    const hasData = !!r.lastSyncedAt && (r.rowCount == null || r.rowCount > 0) && !r.error;
+    if (hasData && (r.status === "disconnected" || r.status === "error")) {
+      return r.ageMinutes != null && r.ageMinutes > 720 ? "degraded" : "healthy";
+    }
+    return r.status;
+  });
+  if (effective.some((s) => s === "error")) return "error";
+  if (effective.some((s) => s === "disconnected")) return "disconnected";
+  if (effective.some((s) => s === "degraded")) return "degraded";
   return "healthy";
 }
 
