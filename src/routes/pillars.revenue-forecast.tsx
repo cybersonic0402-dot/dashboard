@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { apiDelete } from "@/lib/api-client";
+import { apiDelete, apiGet } from "@/lib/api-client";
 import { useForecast, useScenarios, type ForecastParams } from "@/hooks/api";
 
 export const Route = createFileRoute("/pillars/revenue-forecast")({
@@ -176,7 +176,24 @@ function RevenueForecastPage() {
   const error = forecastQuery.error
     ? ((forecastQuery.error as any)?.message ?? "Failed to compute forecast")
     : null;
-  const load = () => void forecastQuery.refetch();
+  // The Refresh button is a hard reset: it tells the backend to re-pull the
+  // weekly-cached historical data (refresh=1), then refreshes the view. Normal
+  // page loads / filter changes reuse the cached history — no re-fetch.
+  const load = async () => {
+    try {
+      await apiGet("/api/forecast", {
+        startMonth: forecastParams.startMonth,
+        horizonMonths: forecastParams.horizonMonths,
+        monthlyGrowthRate: forecastParams.monthlyGrowthRate,
+        churnRateOverride: forecastParams.churnRateOverride,
+        subscriberRateOverride: forecastParams.subscriberRateOverride,
+        refresh: 1,
+      });
+    } catch {
+      /* non-fatal — the refetch below still shows the latest available data */
+    }
+    await forecastQuery.refetch();
+  };
 
   // Saved scenarios via the backend read API.
   const scenariosQuery = useScenarios();
