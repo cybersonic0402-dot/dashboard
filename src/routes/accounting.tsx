@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { DashboardShell, RefreshButton } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
 import { useInstantDashboardData } from "@/components/dashboard/useInstantDashboardData";
-import { getAccountingDashboard, syncXeroAll } from "@/server/dashboard-pages.functions";
+import { apiGet, apiPost } from "@/lib/api-client";
 import {
   Card,
   CardHeader,
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { LogIn, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
-import type { XeroReportStatus } from "@/server/dashboard-pages.functions";
+type XeroReportStatus = { key: string; label: string; ok: boolean; reason?: string; diagnostics?: any };
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/accounting")({
@@ -31,7 +31,7 @@ export const Route = createFileRoute("/accounting")({
   component: AccountingPage,
 });
 
-type XData = Awaited<ReturnType<typeof getAccountingDashboard>>;
+type XData = { data: any; source: string; fetchedAt: string | null; ageMinutes: number; error: string | null };
 
 function fmtMoney(n: number | null | undefined, currency = "EUR") {
   if (n == null) return "—";
@@ -45,7 +45,7 @@ function fmtMoney(n: number | null | undefined, currency = "EUR") {
 function AccountingPage() {
   const { user, loading } = useDashboardSession();
   const fetchDashboard = useCallback(
-    (force: boolean) => getAccountingDashboard({ data: { force } }),
+    (force: boolean) => apiGet<XData>("/api/pillars/accounting", { force }),
     []
   );
   const { data, isLoading, load } = useInstantDashboardData<XData>("accounting", fetchDashboard, !!user);
@@ -61,7 +61,7 @@ function AccountingPage() {
     setSyncReports(null);
     const t = toast.loading("Syncing all Xero reports…");
     try {
-      const res: any = await syncXeroAll();
+      const res: any = await apiPost("/api/refresh/xero");
       setSyncReports(res?.reports ?? null);
       if (res?.ok) {
         setSyncOk(true);

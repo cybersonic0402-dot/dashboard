@@ -6,7 +6,7 @@ import { DashboardShell, RefreshButton } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
 import { useInstantDashboardData } from "@/components/dashboard/useInstantDashboardData";
 import { DateRangePicker, defaultRange, toIsoDate } from "@/components/dashboard/Filters";
-import { getInvoiceDashboard } from "@/server/dashboard-pages.functions";
+import { apiGet } from "@/lib/api-client";
 import {
   Card,
   CardHeader,
@@ -30,7 +30,7 @@ export const Route = createFileRoute("/invoices")({
   component: InvoicesPage,
 });
 
-type InvData = Awaited<ReturnType<typeof getInvoiceDashboard>>;
+type InvData = { data: any; source: string; fetchedAt: string | null; ageMinutes: number; error: string | null };
 
 function fmtMoney(n: number | null | undefined, currency = "EUR") {
   if (n == null) return "—";
@@ -47,7 +47,7 @@ function InvoicesPage() {
   const from = toIsoDate(range.from);
   const to = toIsoDate(range.to);
   const fetchDashboard = useCallback(
-    (force: boolean) => getInvoiceDashboard({ data: { from, to, force } }),
+    (force: boolean) => apiGet<InvData>("/api/pillars/invoice", { from, to, force }),
     [from, to]
   );
   const { data, isLoading, load } = useInstantDashboardData<InvData>(

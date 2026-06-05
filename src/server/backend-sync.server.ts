@@ -6,17 +6,14 @@
 // background promises once the response is sent). They now run on Railway,
 // which has no request timeout.
 //
-// These trigger routes forward to the backend when BACKEND_SYNC_URL is set,
+// These trigger routes forward to the backend when VITE_BACKEND_HOST is set,
 // and otherwise fall back to running the work inline (legacy behaviour) so the
 // app still functions in environments where the backend isn't configured.
 
+import { resolveBackendHost } from "@/lib/backend-host";
+
 export function backendSyncBaseUrl(): string | null {
-  const raw =
-    process.env.BACKEND_SYNC_URL ||
-    process.env.VITE_BACKEND_SYNC_URL ||
-    (import.meta as any).env?.VITE_BACKEND_SYNC_URL ||
-    null;
-  return raw ? String(raw).replace(/\/+$/, "") : null;
+  return resolveBackendHost();
 }
 
 export interface BackendTriggerResult {

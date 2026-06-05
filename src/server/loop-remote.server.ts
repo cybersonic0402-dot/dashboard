@@ -8,19 +8,15 @@
 // fetchLoopFromDb on the next page load — so there's nothing to await here
 // beyond confirming the remote sync was accepted.
 
+import { resolveBackendHost } from "@/lib/backend-host";
+
 type Market = "UK" | "US";
 
 // The Loop microservice is now the same Railway backend that runs all the
-// other heavy jobs, so accept BACKEND_SYNC_URL / SYNC_SECRET (the unified env)
-// first and fall back to the legacy LOOP_SYNC_SERVICE_* names.
+// other heavy jobs — use the unified VITE_BACKEND_HOST, falling back to the
+// legacy LOOP_SYNC_SERVICE_URL.
 function remoteBaseUrl(): string | null {
-  return (
-    process.env.BACKEND_SYNC_URL ||
-    process.env.LOOP_SYNC_SERVICE_URL ||
-    process.env.VITE_BACKEND_SYNC_URL ||
-    (import.meta as any).env?.VITE_BACKEND_SYNC_URL ||
-    null
-  );
+  return resolveBackendHost() || process.env.LOOP_SYNC_SERVICE_URL || null;
 }
 
 function remoteSecret(): string | null {

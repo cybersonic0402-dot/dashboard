@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData, triggerXeroSyncNow } from "@/server/dashboard.functions";
+import { useDashboard } from "@/hooks/api";
+import { apiPost } from "@/lib/api-client";
 import { MonthlyView } from "@/components/FinanceDashboard.tsx";
 
 export const Route = createFileRoute("/pillars/monthly-overview")({
@@ -30,8 +31,9 @@ function PillarSkeleton() {
 
 function MonthlyOverviewPage() {
   const { user } = useDashboardSession();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const dashboardQuery = useDashboard();
+  const data = dashboardQuery.data as any;
+  const loading = dashboardQuery.isPending;
   const [retrying, setRetrying] = useState(false);
   const [retryMsg, setRetryMsg] = useState<string | null>(null);
 
@@ -39,10 +41,9 @@ function MonthlyOverviewPage() {
     setRetrying(true);
     setRetryMsg(null);
     try {
-      const res = await triggerXeroSyncNow();
+      const res: any = await apiPost("/api/refresh/xero");
       if (res?.ok) {
-        const fresh = await getDashboardData();
-        setData(fresh);
+        await dashboardQuery.refetch();
         setRetryMsg(null);
       } else {
         setRetryMsg(res?.error ?? "Xero sync failed");
@@ -53,14 +54,6 @@ function MonthlyOverviewPage() {
       setRetrying(false);
     }
   }
-
-  useEffect(() => {
-    let alive = true;
-    getDashboardData()
-      .then((d) => alive && setData(d))
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, []);
 
   if (loading) {
     return (

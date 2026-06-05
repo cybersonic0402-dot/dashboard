@@ -3,8 +3,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData } from "@/server/dashboard.functions";
-import { getManualDataSnapshot } from "@/server/manual-data.functions";
+import { useDashboard } from "@/hooks/api";
+import { apiGet } from "@/lib/api-client";
 import { MarketsView } from "@/components/FinanceDashboard.tsx";
 import { Users, Target, Package, Truck, Building2, Gauge, TrendingUp, TrendingDown } from "lucide-react";
 
@@ -44,8 +44,9 @@ function PillarSkeleton() {
 
 function MarginPerMarketPage() {
   const { user } = useDashboardSession();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const dashboardQuery = useDashboard();
+  const data = dashboardQuery.data as any;
+  const loading = dashboardQuery.isPending;
   const [manualData, setManualData] = useState<any>(null);
 
   const [dateRange, setDateRange] = useState({ from: daysAgoStr(30), to: todayStr() });
@@ -54,10 +55,7 @@ function MarginPerMarketPage() {
 
   useEffect(() => {
     let alive = true;
-    getDashboardData()
-      .then((d) => alive && setData(d))
-      .finally(() => alive && setLoading(false));
-    getManualDataSnapshot()
+    apiGet("/api/settings")
       .then((m) => alive && setManualData(m))
       .catch(() => { if (alive) setManualData(null); });
     return () => { alive = false; };

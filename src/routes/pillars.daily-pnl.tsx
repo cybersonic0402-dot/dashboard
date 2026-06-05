@@ -21,7 +21,7 @@ import {
 } from "recharts";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData, getTripleWhaleRange } from "@/server/dashboard.functions";
+import { useDashboard, useTripleWhaleRange } from "@/hooks/api";
 import { DateRangePicker } from "@/components/FinanceDashboard.tsx";
 import { cn } from "@/lib/utils";
 
@@ -122,11 +122,7 @@ function rangeLabel(from: string, to: string) {
 function DailyPnlPage() {
   const { user } = useDashboardSession();
   const [today, setToday] = useState<TodayRow[]>([]);
-  const [twRange, setTwRange] = useState<TwRow[]>([]);
-  const [twBase, setTwBase] = useState<TwRow[]>([]);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [rangeSyncing, setRangeSyncing] = useState(false);
 
   // Date range — default to "today"
   const [dateRange, setDateRange] = useState<{ from: string; to: string }>({
@@ -153,50 +149,33 @@ function DailyPnlPage() {
     daily?: Record<string, { revenue?: number; adSpend?: number; grossProfit?: number; netProfit?: number }>;
   } | null>(null);
 
+  // Overview payload from the backend (cache-first), sliced into what this page needs.
+  const dashboardQuery = useDashboard();
+  const loading = dashboardQuery.isPending;
   useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    getDashboardData()
-      .then((d: any) => {
-        if (!alive) return;
-        const rawToday = d?.shopifyToday as any;
-        const todayArr: TodayRow[] = Array.isArray(rawToday)
-          ? rawToday
-          : Array.isArray(rawToday?.markets)
-          ? rawToday.markets
-          : [];
-        setToday(todayArr.filter((r) => r && r.code));
-        const xero = d?.xero && typeof d.xero === "object" && !d.xero.__empty && !d.xero.__error ? d.xero : null;
-        setXeroData(xero);
-        setShopifyDaily(d?.shopifyDaily ?? null);
-        setTwDaily(d?.tripleWhaleDaily ?? null);
-        setSyncedAt(d?.syncedAt ?? null);
-      })
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, []);
+    const d: any = dashboardQuery.data;
+    if (!d) return;
+    const rawToday = d?.shopifyToday;
+    const todayArr: TodayRow[] = Array.isArray(rawToday)
+      ? rawToday
+      : Array.isArray(rawToday?.markets)
+      ? rawToday.markets
+      : [];
+    setToday(todayArr.filter((r) => r && r.code));
+    const xero = d?.xero && typeof d.xero === "object" && !d.xero.__empty && !d.xero.__error ? d.xero : null;
+    setXeroData(xero);
+    setShopifyDaily(d?.shopifyDaily ?? null);
+    setTwDaily(d?.tripleWhaleDaily ?? null);
+    setSyncedAt(d?.syncedAt ?? null);
+  }, [dashboardQuery.data]);
 
-  // Fetch TW for the selected range + same-length baseline immediately before it
-  useEffect(() => {
-    let alive = true;
-    setRangeSyncing(true);
-    const base = baselineRange(dateRange.from, dateRange.to);
-    Promise.all([
-      getTripleWhaleRange({ data: { from: dateRange.from, to: dateRange.to } }).catch(() => ({ rows: [] })),
-      getTripleWhaleRange({ data: { from: base.from, to: base.to } }).catch(() => ({ rows: [] })),
-    ])
-      .then(([r, b]: any[]) => {
-        if (!alive) return;
-        setTwRange((r?.rows as TwRow[]) || []);
-        setTwBase((b?.rows as TwRow[]) || []);
-      })
-      .finally(() => alive && setRangeSyncing(false));
-    return () => {
-      alive = false;
-    };
-  }, [dateRange.from, dateRange.to]);
+  // Triple Whale for the selected range + same-length baseline (two cached queries).
+  const base = useMemo(() => baselineRange(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
+  const twRangeQuery = useTripleWhaleRange(dateRange.from, dateRange.to);
+  const twBaseQuery = useTripleWhaleRange(base.from, base.to);
+  const twRange = (((twRangeQuery.data as any)?.rows ?? []) as TwRow[]);
+  const twBase = (((twBaseQuery.data as any)?.rows ?? []) as TwRow[]);
+  const rangeSyncing = twRangeQuery.isFetching || twBaseQuery.isFetching;
 
   // ---- Range KPIs ----
   // All values come from Triple Whale (already converted to EUR via fxRate).

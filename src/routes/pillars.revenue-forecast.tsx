@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -13,12 +13,8 @@ import {
 } from "recharts";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import {
-  getRevenueForecastFn,
-  listScenariosFn,
-  loadScenarioFn,
-  deleteScenarioFn,
-} from "@/server/dashboard.functions";
+import { apiDelete } from "@/lib/api-client";
+import { useForecast, useScenarios, type ForecastParams } from "@/hooks/api";
 
 export const Route = createFileRoute("/pillars/revenue-forecast")({
   head: () => ({ meta: [{ title: "Revenue forecast — Zapply" }] }),
@@ -138,133 +134,87 @@ function RevenueForecastPage() {
   const [growthPct, setGrowthPct] = useState<string>("0");
   const [churnPctOverride, setChurnPctOverride] = useState<string>("");
   const [subRateOverride, setSubRateOverride] = useState<string>("");
-  const [scenarios, setScenarios] = useState<ScenarioListItem[]>([]);
   const [scenariosError, setScenariosError] = useState<string | null>(null);
-
-  const [data, setData] = useState<{
-    markets: MarketForecast[];
-    twWarning: string | null;
-    fetchedAt: string;
-    diagnostics: Array<{ name: string; ok: boolean; cached: boolean; error: string | null }>;
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [selectedMarket, setSelectedMarket] = useState<Market | "ALL">("ALL");
 
-  const retryRef = useRef(0);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const growth = Number(growthPct);
-      const churn = churnPctOverride === "" ? null : Number(churnPctOverride);
-      const sub = subRateOverride === "" ? null : Number(subRateOverride);
-      const res = (await getRevenueForecastFn({
-        data: {
-          startMonth,
-          horizonMonths: horizon,
-          monthlyGrowthRate: isFinite(growth) ? growth / 100 : 0,
-          churnRateOverride:
-            churn == null ? null : isFinite(churn) ? churn / 100 : null,
-          subscriberRateOverride:
-            sub == null ? null : isFinite(sub) ? sub / 100 : null,
-        },
-      })) as any;
-      if (!res?.ok) {
-        setError(res?.error ?? "Failed to compute forecast");
-        setData(null);
-        // While the backend precomputes the forecast (cache miss), poll a few
-        // times so the page fills in automatically without a manual refresh.
-        if (res?.computing && retryRef.current < 6) {
-          retryRef.current += 1;
-          setTimeout(() => void load(), 20_000);
-        }
-        return;
-      }
-      retryRef.current = 0;
-      setData({
-        markets: res.markets as MarketForecast[],
-        twWarning: res.twWarning ?? null,
-        fetchedAt: res.fetchedAt,
-        diagnostics: res.diagnostics ?? [],
-      });
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to compute forecast");
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
+  // Forecast via the backend read API (cache-first). Changing any assumption
+  // updates the query key, which refetches automatically — no more in-process
+  // compute on Vercel, so the page can't time out.
+  const forecastParams = useMemo<ForecastParams>(() => {
+    const growth = Number(growthPct);
+    const churn = churnPctOverride === "" ? null : Number(churnPctOverride);
+    const sub = subRateOverride === "" ? null : Number(subRateOverride);
+    return {
+      startMonth,
+      horizonMonths: horizon,
+      monthlyGrowthRate: isFinite(growth) ? growth / 100 : 0,
+      churnRateOverride: churn == null ? null : isFinite(churn) ? churn / 100 : null,
+      subscriberRateOverride: sub == null ? null : isFinite(sub) ? sub / 100 : null,
+    };
   }, [startMonth, horizon, growthPct, churnPctOverride, subRateOverride]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const forecastQuery = useForecast(forecastParams);
+  const data = useMemo(() => {
+    const d = forecastQuery.data as any;
+    if (!d || !Array.isArray(d.markets)) return null;
+    return {
+      markets: d.markets as MarketForecast[],
+      twWarning: (d.twWarning ?? null) as string | null,
+      fetchedAt: d.fetchedAt as string,
+      diagnostics: (d.diagnostics ?? []) as Array<{
+        name: string;
+        ok: boolean;
+        cached: boolean;
+        error: string | null;
+      }>,
+    };
+  }, [forecastQuery.data]);
+  const loading = forecastQuery.isPending || forecastQuery.isFetching;
+  const error = forecastQuery.error
+    ? ((forecastQuery.error as any)?.message ?? "Failed to compute forecast")
+    : null;
+  const load = () => void forecastQuery.refetch();
 
-  const loadScenarios = useCallback(async () => {
-    try {
-      const res = (await listScenariosFn({ data: undefined as any })) as any;
-      if (res?.ok) {
-        setScenarios((res.scenarios ?? []) as ScenarioListItem[]);
-        setScenariosError(null);
-      } else {
-        setScenariosError(res?.error ?? "Failed to load scenarios");
-      }
-    } catch (err: any) {
-      setScenariosError(err?.message ?? "Failed to load scenarios");
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadScenarios();
-  }, [loadScenarios]);
+  // Saved scenarios via the backend read API.
+  const scenariosQuery = useScenarios();
+  const scenarios = ((scenariosQuery.data as any)?.scenarios ?? []) as ScenarioListItem[];
 
   const applyScenario = useCallback(
-    async (id: string) => {
-      try {
-        const res = (await loadScenarioFn({ data: { id } })) as any;
-        if (!res?.ok) {
-          setScenariosError(res?.error ?? "Failed to load scenario");
-          return;
-        }
-        const a = (res.scenario?.assumptions ?? {}) as ScenarioListItem["assumptions"];
-        if (typeof a.monthlyGrowthRate === "number") {
-          setGrowthPct(String(a.monthlyGrowthRate * 100));
-        }
-        if (a.churnRateOverride == null) {
-          setChurnPctOverride("");
-        } else if (typeof a.churnRateOverride === "number") {
-          setChurnPctOverride(String(a.churnRateOverride * 100));
-        }
-        if (a.subscriberRateOverride == null) {
-          setSubRateOverride("");
-        } else if (typeof a.subscriberRateOverride === "number") {
-          setSubRateOverride(String(a.subscriberRateOverride * 100));
-        }
-        if (typeof a.horizonMonths === "number") setHorizon(a.horizonMonths);
-        setScenariosError(null);
-      } catch (err: any) {
-        setScenariosError(err?.message ?? "Failed to load scenario");
+    (id: string) => {
+      // The scenarios list already carries each scenario's assumptions, so we
+      // apply them straight from cache — no extra round trip.
+      const sc = scenarios.find((s) => s.id === id);
+      if (!sc) {
+        setScenariosError("Scenario not found");
+        return;
       }
+      const a = (sc.assumptions ?? {}) as ScenarioListItem["assumptions"];
+      if (typeof a.monthlyGrowthRate === "number") setGrowthPct(String(a.monthlyGrowthRate * 100));
+      if (a.churnRateOverride == null) setChurnPctOverride("");
+      else if (typeof a.churnRateOverride === "number") setChurnPctOverride(String(a.churnRateOverride * 100));
+      if (a.subscriberRateOverride == null) setSubRateOverride("");
+      else if (typeof a.subscriberRateOverride === "number") setSubRateOverride(String(a.subscriberRateOverride * 100));
+      if (typeof a.horizonMonths === "number") setHorizon(a.horizonMonths);
+      setScenariosError(null);
     },
-    [],
+    [scenarios],
   );
 
   const removeScenario = useCallback(
     async (id: string, name: string) => {
       if (!confirm(`Delete scenario "${name}"?`)) return;
       try {
-        const res = (await deleteScenarioFn({ data: { id } })) as any;
+        const res: any = await apiDelete(`/api/scenarios/${id}`);
         if (!res?.ok) {
           setScenariosError(res?.error ?? "Failed to delete scenario");
           return;
         }
-        await loadScenarios();
+        await scenariosQuery.refetch();
       } catch (err: any) {
         setScenariosError(err?.message ?? "Failed to delete scenario");
       }
     },
-    [loadScenarios],
+    [scenariosQuery],
   );
 
   const aggregate = useMemo(() => {
@@ -394,7 +344,7 @@ function RevenueForecastPage() {
         <ScenariosPanel
           scenarios={scenarios}
           error={scenariosError}
-          onRefresh={() => void loadScenarios()}
+          onRefresh={() => void scenariosQuery.refetch()}
           onApply={(id) => void applyScenario(id)}
           onDelete={(id, name) => void removeScenario(id, name)}
         />

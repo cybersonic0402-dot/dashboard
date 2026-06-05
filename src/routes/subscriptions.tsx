@@ -6,7 +6,7 @@ import { DashboardShell, RefreshButton } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
 import { useInstantDashboardData } from "@/components/dashboard/useInstantDashboardData";
 import { StoreSelect, DateRangePicker, defaultRange, toIsoDate, type StoreOption } from "@/components/dashboard/Filters";
-import { getSubscriptionDashboard } from "@/server/dashboard-pages.functions";
+import { apiGet } from "@/lib/api-client";
 import { STORE_OPTIONS } from "@/lib/dashboard-stores";
 import {
   Card,
@@ -31,7 +31,7 @@ export const Route = createFileRoute("/subscriptions")({
   component: SubscriptionsPage,
 });
 
-type SubData = Awaited<ReturnType<typeof getSubscriptionDashboard>>;
+type SubData = { data: any; platform: string; source: string; fetchedAt: string | null; ageMinutes: number; error: string | null };
 
 function fmtMoney(n: number | null | undefined, currency = "EUR") {
   if (n == null) return "—";
@@ -57,7 +57,7 @@ function SubscriptionsPage() {
   const from = toIsoDate(range.from);
   const to = toIsoDate(range.to);
   const fetchDashboard = useCallback(
-    (force: boolean) => getSubscriptionDashboard({ data: { storeCode: storeCode as any, from, to, force } }),
+    (force: boolean) => apiGet<SubData>("/api/pillars/subscription", { storeCode, from, to, force }),
     [storeCode, from, to]
   );
   const { data, isLoading, load } = useInstantDashboardData<SubData>(

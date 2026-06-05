@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { getSyncStatus } from "@/server/dashboard.functions";
+import { apiGet } from "@/lib/api-client";
 import ZapplyEmbed from "@/components/ZapplyEmbed";
 import {
   Sidebar,
@@ -73,7 +73,7 @@ function AppSidebar({ user }: { user: { name: string; email: string; avatar: str
 
   useEffect(() => {
     let alive = true;
-    const load = () => getSyncStatus().then((s) => alive && setStatus(s)).catch(() => {});
+    const load = () => apiGet("/api/sync/status").then((s) => alive && setStatus(s)).catch(() => {});
     load();
     const id = setInterval(load, 60_000);
     return () => { alive = false; clearInterval(id); };

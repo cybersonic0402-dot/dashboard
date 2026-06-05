@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData, getInstagramProfile } from "@/server/dashboard.functions";
-import { setAppSetting } from "@/server/manual-data.functions";
+import { useDashboard, useInstagramProfile } from "@/hooks/api";
+import { apiPost } from "@/lib/api-client";
 import {
   Briefcase, TrendingUp, Wallet, Building2, Info, Sliders,
   DollarSign, Repeat, UserMinus, Star, Users, Pencil,
@@ -501,29 +501,14 @@ function buildMethods(
 // ─── PAGE ──────────────────────────────────────────────────────────────────
 function ValuationPage() {
   const { user } = useDashboardSession();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [igProfile, setIgProfile] = useState<any>(null);
+  const dashboardQuery = useDashboard();
+  const data = dashboardQuery.data as any;
+  const loading = dashboardQuery.isPending;
+  const igProfile = useInstagramProfile().data as any;
 
   const [revMult, setRevMult] = useState(2.5);
   const [ebitdaMult, setEbitdaMult] = useState(6);
   const [dcfGrowth, setDcfGrowth] = useState(15);
-
-  useEffect(() => {
-    let alive = true;
-    getDashboardData()
-      .then((d) => alive && setData(d))
-      .finally(() => alive && setLoading(false));
-    // Load Instagram profile separately — getInstagramProfile is cache-gated
-    // server-side (6h window) so this stays well under the 5 req/day proxy
-    // cap even if the user navigates here repeatedly.
-    getInstagramProfile()
-      .then((p) => alive && setIgProfile(p))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const inputs = useMemo(() => deriveInputs(data ?? {}), [data]);
   const { signals, composite } = useMemo(() => buildQualityScore(inputs), [inputs]);
@@ -628,7 +613,7 @@ function ValuationPage() {
           </div>
 
           {/* Headline metric circles */}
-          <MetricCircles data={data} inputs={inputs} onSaved={() => getDashboardData().then(setData)} />
+          <MetricCircles data={data} inputs={inputs} onSaved={() => void dashboardQuery.refetch()} />
 
           {/* Method breakdown */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
@@ -1118,7 +1103,7 @@ function MetricCircles({
 
   async function saveMetric(key: string, value: number) {
     const next = { ...cm, [key]: value };
-    await setAppSetting({ data: { key: "company_metrics", value: next } });
+    await apiPost("/api/settings", { key: "company_metrics", value: next });
     onSaved();
   }
 

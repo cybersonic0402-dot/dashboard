@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { getInstagramProfile } from "@/server/dashboard.functions";
+import { apiGet } from "@/lib/api-client";
 import {
   RefreshCw, BadgeCheck, ExternalLink, Heart, MessageCircle,
   Play, Grid3x3, TrendingUp, AlertCircle,
@@ -29,7 +29,7 @@ function IgZapplyPage() {
 
   const load = async () => {
     try {
-      const p = await getInstagramProfile();
+      const p = await apiGet("/api/instagram/profile");
       setProfile(p);
     } catch (err: any) {
       // Server fn itself failed (network / 500). Surface the real reason

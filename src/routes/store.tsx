@@ -5,7 +5,7 @@ import { DashboardShell, RefreshButton } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
 import { useInstantDashboardData } from "@/components/dashboard/useInstantDashboardData";
 import { StoreSelect, DateRangePicker, defaultRange, toIsoDate, type StoreOption } from "@/components/dashboard/Filters";
-import { getStoreDashboard } from "@/server/dashboard-pages.functions";
+import { apiGet } from "@/lib/api-client";
 import { STORE_OPTIONS } from "@/lib/dashboard-stores";
 import {
   Card,
@@ -31,7 +31,7 @@ export const Route = createFileRoute("/store")({
   component: StoreDashboardPage,
 });
 
-type StoreData = Awaited<ReturnType<typeof getStoreDashboard>>;
+type StoreData = { detail: any; source: string; fetchedAt: string | null; ageMinutes: number; error: string | null };
 
 function fmtMoney(n: number, currency = "EUR") {
   try {
@@ -48,7 +48,7 @@ function StoreDashboardPage() {
   const from = toIsoDate(range.from);
   const to = toIsoDate(range.to);
   const fetchDashboard = useCallback(
-    (force: boolean) => getStoreDashboard({ data: { storeCode: storeCode as any, from, to, force } }),
+    (force: boolean) => apiGet<StoreData>("/api/pillars/store", { storeCode, from, to, force }),
     [storeCode, from, to]
   );
   const { data, isLoading, load } = useInstantDashboardData<StoreData>(
@@ -130,7 +130,7 @@ function StoreDashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {detail?.orders.slice(0, 200).map((o) => (
+                  {detail?.orders.slice(0, 200).map((o: any) => (
                     <TableRow key={o.id}>
                       <TableCell className="font-medium">{o.name}</TableCell>
                       <TableCell className="text-muted-foreground">
@@ -177,7 +177,7 @@ function StoreDashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {detail?.customers.slice(0, 100).map((c) => (
+                  {detail?.customers.slice(0, 100).map((c: any) => (
                     <TableRow key={c.id}>
                       <TableCell className="font-medium">{c.name}</TableCell>
                       <TableCell className="text-muted-foreground">{c.email ?? "—"}</TableCell>

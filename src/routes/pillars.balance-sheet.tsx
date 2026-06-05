@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertTriangle, Wallet, Plug, Box, LineChart, ChevronDown } from "lucide-react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData } from "@/server/dashboard.functions";
+import { useDashboard } from "@/hooks/api";
 
 export const Route = createFileRoute("/pillars/balance-sheet")({
   head: () => ({ meta: [{ title: "Balance Sheet — Zapply" }] }),
@@ -193,21 +193,12 @@ function severityBadge(pct: number) {
 // ───────── component ─────────
 function BalanceSheetPage() {
   const { user } = useDashboardSession();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const dashboardQuery = useDashboard();
+  const data = dashboardQuery.data as any;
+  const loading = dashboardQuery.isPending;
   const [activeCat, setActiveCat] = useState<string>("supplier");
   const [showWeeks, setShowWeeks] = useState(false);
   const [activeBlock, setActiveBlock] = useState<"cash" | "inventory" | "topay" | "toreceive" | null>("cash");
-
-  useEffect(() => {
-    let alive = true;
-    getDashboardData()
-      .then((d) => alive && setData(d))
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const { xero, xeroError, jortt, shopifyPayouts, paypalBalances, mollieBalances, syncedAt } = useMemo(() => {
     const xero =

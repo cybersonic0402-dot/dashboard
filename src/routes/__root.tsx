@@ -1,4 +1,8 @@
 import { Outlet, Link, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { useState } from "react";
+import { makeQueryClient, makePersister } from "@/lib/query-client";
 
 import appCss from "../styles.css?url";
 
@@ -69,5 +73,25 @@ function RootShell({ children }: { children: React.ReactNode }) {
 }
 
 function RootComponent() {
-  return <Outlet />;
+  // Per-tree QueryClient (SSR-safe; one instance for the app lifetime).
+  const [queryClient] = useState(makeQueryClient);
+  // Client-only localStorage persister → instant paint from cache on reload.
+  const [persister] = useState(makePersister);
+
+  if (persister) {
+    return (
+      <PersistQueryClientProvider
+        client={queryClient}
+        persistOptions={{ persister, maxAge: 24 * 60 * 60_000 }}
+      >
+        <Outlet />
+      </PersistQueryClientProvider>
+    );
+  }
+  // SSR fallback (no window): plain provider.
+  return (
+    <QueryClientProvider client={queryClient}>
+      <Outlet />
+    </QueryClientProvider>
+  );
 }

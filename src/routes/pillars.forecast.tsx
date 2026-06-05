@@ -26,7 +26,8 @@ import {
 } from "lucide-react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData, getGrowthYearData } from "@/server/dashboard.functions";
+import { useDashboard } from "@/hooks/api";
+import { apiGet } from "@/lib/api-client";
 
 export const Route = createFileRoute("/pillars/forecast")({
   head: () => ({ meta: [{ title: "Forecast — Zapply" }] }),
@@ -76,19 +77,10 @@ function isoWeek(d: Date) {
 
 function ForecastPage() {
   const { user } = useDashboardSession();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const dashboardQuery = useDashboard();
+  const data = dashboardQuery.data as any;
+  const loading = dashboardQuery.isPending;
   const [tab, setTab] = useState<"cashflow" | "growth">("cashflow");
-
-  useEffect(() => {
-    let alive = true;
-    getDashboardData()
-      .then((d) => alive && setData(d))
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const {
     weeks,
@@ -1041,7 +1033,7 @@ function GrowthPlan2026({ data }: { data: any }) {
     let alive = true;
     setLoadingYear(selectedYear);
     setYearError(null);
-    getGrowthYearData({ data: { year: selectedYear } })
+    apiGet<any>("/api/growth-year", { year: selectedYear })
       .then((res: any) => {
         if (!alive) return;
         if (res?.ok) {

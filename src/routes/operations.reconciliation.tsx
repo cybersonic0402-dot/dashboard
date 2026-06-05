@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Plus, Info, AlertTriangle } from "lucide-react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData } from "@/server/dashboard.functions";
+import { useDashboard } from "@/hooks/api";
 
 export const Route = createFileRoute("/operations/reconciliation")({
   head: () => ({ meta: [{ title: "Reconciliation — Profit Variance — Zapply" }] }),
@@ -34,16 +34,9 @@ type Row = { label: string; source: Source; value: number | null; tone: "pos" | 
 
 function ReconciliationPage() {
   const { user } = useDashboardSession();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    getDashboardData()
-      .then((d) => alive && setData(d))
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, []);
+  const dashboardQuery = useDashboard();
+  const data = dashboardQuery.data as any;
+  const loading = dashboardQuery.isPending;
 
   const computed = useMemo(() => {
     const shopifyMonthly: any[] = Array.isArray(data?.shopifyMonthly) ? data.shopifyMonthly : [];

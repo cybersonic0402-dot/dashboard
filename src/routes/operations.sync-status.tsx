@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw, Plug, AlertCircle, ChevronRight, LayoutGrid } from "lucide-react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getSyncStatus, getDashboardData, triggerSyncNow, triggerXeroSyncNow, triggerPicqerSyncNow, getLoopStoreStatus, getLoopApiPendingCount, triggerLoopFullSync, runLoopSyncChunk, triggerShopifyFullSync, getShopifySyncStatus, runShopifySyncChunk, triggerInstagramSync, getInstagramFollowers } from "@/server/dashboard.functions";
+import { apiGet, apiPost } from "@/lib/api-client";
 
 export const Route = createFileRoute("/operations/sync-status")({
   head: () => ({ meta: [{ title: "Sync status — Zapply" }] }),
@@ -225,14 +225,14 @@ function InstagramPanel() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getInstagramFollowers().then(setResult).catch(() => {});
+    apiGet("/api/instagram/followers").then(setResult).catch(() => {});
   }, []);
 
   async function sync() {
     setBusy(true);
     setError(null);
     try {
-      const r = await triggerInstagramSync();
+      const r: any = await apiPost("/api/refresh/instagram");
       setResult(r);
       if (r?.error && r?.followers == null) setError(r.error);
     } catch (err: any) {
@@ -309,7 +309,7 @@ function ShopifyBackfillPanel() {
 
   const load = async () => {
     try {
-      const s = await getShopifySyncStatus();
+      const s: any = await apiGet("/api/sync/shopify");
       setStatus(s);
       setError(null);
       return s;
@@ -357,7 +357,7 @@ function ShopifyBackfillPanel() {
     busyRef.current = true;
     setError(null);
     try {
-      await triggerShopifyFullSync();
+      await apiPost("/api/refresh/shopify-orders");
       await load();
     } catch (err: any) {
       setError(err?.message ?? "Sync failed");
@@ -407,7 +407,9 @@ function ShopifyBackfillPanel() {
     setBusy(`${store}${reset ? ":reset" : ""}`);
     setError(null);
     try {
-      await runShopifySyncChunk({ data: { store, reset } });
+      // Backend syncs all stores to completion in one pass (the per-store /
+      // reset chunking is obsolete now the work runs on Railway).
+      await apiPost("/api/refresh/shopify-orders");
       await load();
     } catch (err: any) {
       setError(err?.message ?? "Sync failed");
@@ -571,9 +573,9 @@ function SyncStatusPage() {
     setRefreshing(true);
     try {
       const [s, d, ld] = await Promise.all([
-        getSyncStatus(),
-        getDashboardData(),
-        getLoopStoreStatus().catch((err: any) => {
+        apiGet("/api/sync/status"),
+        apiGet("/api/dashboard"),
+        apiGet("/api/sync/loop").catch((err: any) => {
           setLoopAdminError(err?.message ?? "Admin access required");
           return null;
         }),
@@ -592,8 +594,12 @@ function SyncStatusPage() {
   const syncNow = async () => {
     setRefreshing(true);
     try {
-      await triggerSyncNow();
-      const [s, d, ld] = await Promise.all([getSyncStatus(), getDashboardData(), getLoopStoreStatus().catch(() => null)]);
+      await apiPost("/api/refresh/dashboard");
+      const [s, d, ld] = await Promise.all([
+        apiGet("/api/sync/status"),
+        apiGet("/api/dashboard"),
+        apiGet("/api/sync/loop").catch(() => null),
+      ]);
       setStatus(s as any);
       setData(d);
       if (ld) setLoopDb(ld as any);
@@ -607,7 +613,7 @@ function SyncStatusPage() {
   const checkLoopApi = async () => {
     setLoopChecking(true);
     try {
-      const r = await getLoopApiPendingCount();
+      const r = await apiGet("/api/loop/pending");
       setLoopPending(r as any);
       setLoopAdminError(null);
     } catch (err: any) {
@@ -623,45 +629,32 @@ function SyncStatusPage() {
   // exits after one iteration per market. Progress is observed by polling
   // getLoopStoreStatus, which reads live row counts from Supabase as the
   // microservice writes them — UK takes ~10–15 minutes to finish.
+  // The backend runs the full UK+US Loop sync to completion (~10–15 min) on
+  // Railway — no more client-driven chunk loop. Fire it once, then poll DB
+  // counts so the cards climb live.
   const fullSyncLoop = async () => {
     setLoopSyncing(true);
-    setLoopProgress({ UK: null, US: null });
+    const running = (done: boolean, total = 0) => ({ status: done ? "done" : "ACTIVE", page: 0, total, done });
+    setLoopProgress({ UK: running(false), US: running(false) });
     try {
-      const markets: Array<"UK" | "US"> = ["UK", "US"];
-      const doneMap: Record<string, boolean> = { UK: false, US: false };
-      // First call: reset both
-      let firstPass = true;
-      // Drive both markets in parallel with bounded iterations.
-      for (let i = 0; i < 200; i++) {
-        if (doneMap.UK && doneMap.US) break;
-        const calls = markets.map(async (m) => {
-          if (doneMap[m]) return null;
-          const res: any = await runLoopSyncChunk({ data: { market: m, reset: firstPass } });
-          doneMap[m] = !!res.allDone;
-          // pick the currently-active status to show
-          const entries = Object.entries(res.perStatus ?? {}) as Array<[string, any]>;
-          const active = entries.find(([, v]) => !v.done) ?? entries[entries.length - 1];
-          setLoopProgress((p) => ({
-            ...p,
-            [m]: active
-              ? { status: active[0], page: active[1].page, total: active[1].total, done: !!res.allDone, error: res.lastError }
-              : { status: "—", page: 0, total: 0, done: !!res.allDone, error: res.lastError },
-          }));
-          // Refresh DB counts after each chunk
-          try {
-            const ld = await getLoopStoreStatus();
-            setLoopDb(ld as any);
-          } catch {}
-          if (res.lastError) doneMap[m] = true; // stop looping on error
-          return res;
-        });
-        await Promise.all(calls);
-        firstPass = false;
-      }
+      await apiPost("/api/refresh/loop");
       setLoopPending(null);
-      const ld = await getLoopStoreStatus().catch(() => null);
-      if (ld) setLoopDb(ld as any);
       setLoopAdminError(null);
+      for (let i = 0; i < 90; i++) {
+        await new Promise((r) => setTimeout(r, 10_000));
+        const ld: any = await apiGet("/api/sync/loop").catch(() => null);
+        if (!ld) continue;
+        setLoopDb(ld);
+        setLoopProgress((p) => {
+          const next = { ...p };
+          for (const m of ["UK", "US"] as const) {
+            const row = (ld.stores ?? []).find((s: any) => s.market === m);
+            next[m] = running(false, row?.total ?? row?.inDatabase ?? row?.count ?? 0);
+          }
+          return next;
+        });
+      }
+      setLoopProgress({ UK: running(true), US: running(true) });
     } catch (err: any) {
       setLoopAdminError(err?.message ?? "Admin access required");
     } finally {
@@ -673,10 +666,10 @@ function SyncStatusPage() {
   const syncConnector = async (id: string) => {
     setRefreshing(true);
     try {
-      if (id === "xero") await triggerXeroSyncNow();
-      else if (id === "fulfillment") await triggerPicqerSyncNow();
-      else await triggerSyncNow();
-      const [s, d] = await Promise.all([getSyncStatus(), getDashboardData()]);
+      if (id === "xero") await apiPost("/api/refresh/xero");
+      else if (id === "fulfillment") await apiPost("/api/refresh/picqer");
+      else await apiPost("/api/refresh/dashboard");
+      const [s, d] = await Promise.all([apiGet("/api/sync/status"), apiGet("/api/dashboard")]);
       setStatus(s as any);
       setData(d);
     } finally {

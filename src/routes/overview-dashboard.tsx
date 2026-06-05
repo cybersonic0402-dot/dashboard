@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import { getDashboardData } from "@/server/dashboard.functions";
+import { useDashboard } from "@/hooks/api";
 import { OverviewView } from "@/components/FinanceDashboard.tsx";
 
 export const Route = createFileRoute("/overview-dashboard")({
@@ -51,20 +51,14 @@ function OverviewSkeleton() {
 
 function OverviewPage() {
   const { user } = useDashboardSession();
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  // Overview payload from the backend read API (cache-first → instant render).
+  const dashboardQuery = useDashboard();
+  const data = dashboardQuery.data as any;
+  const loading = dashboardQuery.isPending;
 
   const [dateRange, setDateRange] = useState({ from: daysAgoStr(7), to: todayStr() });
   const [rangeData, setRangeData] = useState<any>(null);
   const [rangeSyncing, setRangeSyncing] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    getDashboardData()
-      .then((d) => alive && setData(d))
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, []);
 
   // Auto-load the default 7D range on first mount (cached data is "this month").
   useEffect(() => {

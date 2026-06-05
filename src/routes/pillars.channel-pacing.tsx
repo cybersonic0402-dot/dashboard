@@ -2,11 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
-import {
-  getChannelPacingFn,
-  setChannelTargetFn,
-  deleteChannelTargetFn,
-} from "@/server/dashboard.functions";
+import { apiGet, apiPost, apiDelete } from "@/lib/api-client";
 
 export const Route = createFileRoute("/pillars/channel-pacing")({
   head: () => ({ meta: [{ title: "Channel pacing — Zapply" }] }),
@@ -101,7 +97,7 @@ function ChannelPacingPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = (await getChannelPacingFn({ data: { monthStart } })) as any;
+      const res = (await apiGet("/api/channel-pacing", { monthStart })) as any;
       if (!res?.ok) {
         setError(res?.error ?? "Failed to load pacing data");
         setRows([]);
@@ -390,15 +386,13 @@ function TargetEditRow({
       const rs = Number(roas);
       if (!isFinite(sp) || sp < 0) throw new Error("Spend must be a number ≥ 0");
       if (!isFinite(rs) || rs < 0) throw new Error("ROAS must be a number ≥ 0");
-      const res = (await setChannelTargetFn({
-        data: {
-          market: row.market,
-          channel: row.channel,
-          month: monthStart,
-          spend_target: sp,
-          roas_target: rs,
-          notes: notes.trim() ? notes.trim() : null,
-        },
+      const res = (await apiPost("/api/channel-pacing/target", {
+        market: row.market,
+        channel: row.channel,
+        month: monthStart,
+        spend_target: sp,
+        roas_target: rs,
+        notes: notes.trim() ? notes.trim() : null,
       })) as any;
       if (!res?.ok) throw new Error(res?.error ?? "Save failed");
       onSaved();
@@ -415,9 +409,7 @@ function TargetEditRow({
     setSaving(true);
     setErr(null);
     try {
-      const res = (await deleteChannelTargetFn({
-        data: { id: row.targetId },
-      })) as any;
+      const res = (await apiDelete(`/api/channel-pacing/target/${row.targetId}`)) as any;
       if (!res?.ok) throw new Error(res?.error ?? "Delete failed");
       onSaved();
     } catch (e: any) {
