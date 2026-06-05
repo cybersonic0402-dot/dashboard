@@ -1,4 +1,4 @@
-import { authedFetch } from "@/lib/authed-fetch";
+import { apiGet } from "@/lib/api-client";
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
@@ -64,9 +64,8 @@ function OverviewPage() {
   useEffect(() => {
     let alive = true;
     setRangeSyncing(true);
-    authedFetch(`/api/sync?from=${daysAgoStr(7)}&to=${todayStr()}`, { method: "POST" })
-      .then((r) => r.json())
-      .then((json) => { if (alive) setRangeData(json.rangeData ?? null); })
+    apiGet("/api/range", { from: daysAgoStr(7), to: todayStr() })
+      .then((d) => { if (alive) setRangeData(d); })
       .catch(() => { if (alive) setRangeData(null); })
       .finally(() => { if (alive) setRangeSyncing(false); });
     return () => { alive = false; };
@@ -82,9 +81,8 @@ function OverviewPage() {
     setRangeSyncing(true);
     setRangeData(null);
     try {
-      const res = await authedFetch(`/api/sync?from=${from}&to=${to}`, { method: "POST" });
-      const json = await res.json();
-      setRangeData(json.rangeData ?? null);
+      const d = await apiGet("/api/range", { from, to });
+      setRangeData(d);
     } catch {
       setRangeData(null);
     } finally {
