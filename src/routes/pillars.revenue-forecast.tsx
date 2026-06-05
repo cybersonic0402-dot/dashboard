@@ -167,6 +167,9 @@ function RevenueForecastPage() {
         cached: boolean;
         error: string | null;
       }>,
+      historySeries: (d.historySeries ?? []) as Array<{ monthIso: string; monthLabel: string; revenue: number }>,
+      etsForecast: (d.etsForecast ?? []) as Array<{ monthIso: string; monthLabel: string; p50: number; lower: number; upper: number }>,
+      etsMethod: (d.etsMethod ?? null) as string | null,
     };
   }, [forecastQuery.data]);
   const loading = forecastQuery.isPending || forecastQuery.isFetching;
@@ -284,6 +287,53 @@ function RevenueForecastPage() {
     }));
   }, [aggregate]);
 
+  // Excel-style "history → forecast" series: actual monthly revenue (all
+  // markets) flowing into the Claude forecast + the statistical ETS baseline
+  // with its confidence band. Always all-market so history/ETS/Claude align.
+  const excelChartData = useMemo(() => {
+    if (!data) return [];
+    const hist = data.historySeries ?? [];
+    const ets = data.etsForecast ?? [];
+    // All-market Claude P50 per forecast month (independent of the selector).
+    const claudeP50: number[] = [];
+    const first = data.markets[0]?.months ?? [];
+    for (let i = 0; i < first.length; i++) {
+      let sum = 0;
+      for (const m of data.markets) sum += m.months[i]?.totalP50 ?? 0;
+      claudeP50.push(Math.round(sum));
+    }
+    const rows: Array<{
+      label: string;
+      actual: number | null;
+      claude: number | null;
+      ets: number | null;
+      band: [number, number] | null;
+    }> = [];
+    hist.forEach((h, i) => {
+      const isLast = i === hist.length - 1;
+      rows.push({
+        label: h.monthLabel,
+        actual: Math.round(h.revenue),
+        // Anchor the forecast lines to the last actual so they connect.
+        claude: isLast ? Math.round(h.revenue) : null,
+        ets: isLast ? Math.round(h.revenue) : null,
+        band: isLast ? [Math.round(h.revenue), Math.round(h.revenue)] : null,
+      });
+    });
+    const n = Math.max(ets.length, claudeP50.length, first.length);
+    for (let i = 0; i < n; i++) {
+      const e = ets[i];
+      rows.push({
+        label: e?.monthLabel ?? first[i]?.monthLabel ?? `+${i + 1}`,
+        actual: null,
+        claude: claudeP50[i] ?? null,
+        ets: e ? e.p50 : null,
+        band: e ? [e.lower, e.upper] : null,
+      });
+    }
+    return rows;
+  }, [data]);
+
   return (
     <DashboardShell user={user}>
       <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
@@ -361,6 +411,7 @@ function RevenueForecastPage() {
               horizon={horizon}
               market={selectedMarket}
             />
+            <HistoryForecastChart rows={excelChartData} etsMethod={data.etsMethod} />
             <ChartCard chartData={chartData} />
             <MonthlyTable months={aggregate.months} />
             {selectedMarket !== "ALL" ? (
@@ -542,6 +593,96 @@ function TotalsStrip({
           </div>
         </div>
       ))}
+    </section>
+  );
+}
+
+// Excel-style "Forecast Sheet" chart: actual revenue history (blue) flowing
+// into the Claude forecast (orange) and the statistical ETS baseline (dashed)
+// with its 95% confidence band (shaded). The vertical separation between the
+// orange Claude line and the dashed ETS line is the AI-vs-pure-statistics gap.
+function HistoryForecastChart({
+  rows,
+  etsMethod,
+}: {
+  rows: Array<{
+    label: string;
+    actual: number | null;
+    claude: number | null;
+    ets: number | null;
+    band: [number, number] | null;
+  }>;
+  etsMethod: string | null;
+}) {
+  if (!rows.length) return null;
+  return (
+    <section className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-medium text-foreground">
+          Revenue — history &amp; forecast
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Actuals → forecast · band = 95% confidence
+          {etsMethod ? ` · ETS: ${etsMethod}` : ""}
+        </div>
+      </div>
+      <div className="h-80 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={rows} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" />
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} minTickGap={16} />
+            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => fmtMoneyK(v)} />
+            <Tooltip
+              formatter={(v: any, name: any) =>
+                Array.isArray(v) ? `${fmtMoney(Number(v[0]))} – ${fmtMoney(Number(v[1]))}` : fmtMoney(Number(v))
+              }
+              labelStyle={{ fontSize: 12 }}
+            />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Area
+              type="monotone"
+              dataKey="band"
+              name="ETS 95% band"
+              stroke="none"
+              fill="#f59e0b"
+              fillOpacity={0.14}
+              connectNulls
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="actual"
+              name="Actual revenue"
+              stroke="#2563eb"
+              strokeWidth={2.5}
+              dot={false}
+              connectNulls
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="claude"
+              name="Claude forecast (P50)"
+              stroke="#ea580c"
+              strokeWidth={3}
+              dot={false}
+              connectNulls
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="ets"
+              name="ETS (statistical)"
+              stroke="#f59e0b"
+              strokeDasharray="5 5"
+              strokeWidth={2}
+              dot={false}
+              connectNulls
+              isAnimationActive={false}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
     </section>
   );
 }
