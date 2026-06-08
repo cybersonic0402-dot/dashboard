@@ -3,10 +3,12 @@ import { useEffect, useState, type CSSProperties } from "react";
 /**
  * Embeds the Zapply chat widget hosted at zapply-chat-widget.vercel.app.
  *
- * Renders as an 80×80 button anchored bottom-right by default. The widget
- * itself posts `zapply:open` / `zapply:close` messages to switch between
- * collapsed and fullscreen overlay modes — we react to those by swapping
- * the iframe's positioning style.
+ * Renders as an 80×80 launcher button anchored bottom-right. While collapsed
+ * the button sits at 10% opacity so the dashboard data underneath stays
+ * readable, and fades to full opacity on hover. The widget itself posts
+ * `zapply:open` / `zapply:close` messages to switch between collapsed and
+ * fullscreen overlay modes — we react to those by swapping the iframe's
+ * positioning style.
  *
  * Token is fetched server-side via /api/zapply-token which exchanges the
  * EMBED_SECRET for a short-lived widget token.
@@ -74,6 +76,13 @@ export default function ZapplyEmbed() {
       id="zapply-widget"
       title="Zapply chat"
       src={src}
+      // Collapsed: faded to 10% so the data behind shows through, full on
+      // hover. Expanded: always fully opaque (it's the fullscreen overlay).
+      className={
+        expanded
+          ? undefined
+          : "opacity-10 transition-opacity duration-200 hover:opacity-100"
+      }
       style={expanded ? EXPANDED_STYLE : COLLAPSED_STYLE}
       allowTransparency
     />

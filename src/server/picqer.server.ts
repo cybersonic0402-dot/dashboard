@@ -353,6 +353,7 @@ export async function fetchPicqerInventory(): Promise<{
     fetchWarehouses(baseUrl, headers),
   ]);
 
+
   // Only resolve images for products that actually have stock — there's no
   // point spending API calls on SKUs the table will never show.
   const productsWithStock = products.filter(
