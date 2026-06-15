@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useDashboardSession } from "@/components/dashboard/useDashboardSession";
+import { useDashboard } from "@/hooks/api";
 import {
   Calculator,
   Package,
@@ -15,6 +16,7 @@ import {
   TrendingUp,
   TrendingDown,
   Info,
+  Activity,
 } from "lucide-react";
 
 export const Route = createFileRoute("/unit-economics")({
@@ -24,7 +26,9 @@ export const Route = createFileRoute("/unit-economics")({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Model — one editable set of assumptions per market. Mirrors the
-// "Zapply Unit Economics Calculator" workbook (tabs: NL & BE / UK / USA).
+// "Zapply Unit Economics Calculator" workbook (tabs: NL & BE / UK / USA),
+// extended to show 3- / 6- / 12-month LTV contribution margins side by side
+// (the workbook only carried a single horizon per market).
 // Soft-green cells in the sheet = inputs here; bright-green = calculated.
 // ─────────────────────────────────────────────────────────────────────────────
 type MarketInputs = {
@@ -35,7 +39,9 @@ type MarketInputs = {
   returnsPct: number; // CUSTOMER RETURNS, share of AOV (C8)
   shipping: number; // SHIPPING COSTS per order (B9)
   fulfilment: number; // FULFILLMENT COST PER UNIT (B10)
-  ltv: number; // LTV uplift multiplier — repeat revenue on top of first order (B14)
+  ltv3: number; // 3-month LTV uplift — repeat revenue on top of first order
+  ltv6: number; // 6-month LTV uplift
+  ltv12: number; // 12-month LTV uplift
   delayedMultiplier: number; // Delayed Purchase Multiplier — 1DC vs 28DC gap (B15)
 };
 
@@ -46,11 +52,12 @@ type MarketMeta = {
   currency: string;
   taxLabel: string;
   taxRate: number;
-  ltvLabel: string; // e.g. "6-month LTV"
-  ltvContribLabel: string; // e.g. "6-month LTV Contribution Margin"
   defaults: MarketInputs;
 };
 
+// LTV uplift seeds: the horizon present in the workbook is the real value;
+// the other two are placeholder curves the client should overwrite with their
+// own cohort LTV (the green cells are editable). NL 6-mo = 1.30, UK 4-mo = 1.29.
 const MARKETS: MarketMeta[] = [
   {
     id: "nl-be",
@@ -59,8 +66,6 @@ const MARKETS: MarketMeta[] = [
     currency: "EUR",
     taxLabel: "BTW",
     taxRate: 0.09,
-    ltvLabel: "6-month LTV",
-    ltvContribLabel: "6-month LTV Contribution Margin",
     defaults: {
       aov: 78,
       cogsPct: 0.1594,
@@ -69,7 +74,9 @@ const MARKETS: MarketMeta[] = [
       returnsPct: 0.017,
       shipping: 5.49,
       fulfilment: 0,
-      ltv: 1.3,
+      ltv3: 0.9,
+      ltv6: 1.3, // workbook value
+      ltv12: 1.8,
       delayedMultiplier: 0.2,
     },
   },
@@ -80,8 +87,6 @@ const MARKETS: MarketMeta[] = [
     currency: "GBP",
     taxLabel: "VAT",
     taxRate: 0.2,
-    ltvLabel: "4-month LTV",
-    ltvContribLabel: "4-month LTV Contribution Margin",
     defaults: {
       aov: 77,
       cogsPct: 0.145,
@@ -90,7 +95,9 @@ const MARKETS: MarketMeta[] = [
       returnsPct: 0.014,
       shipping: 4.58,
       fulfilment: 0,
-      ltv: 1.29,
+      ltv3: 1.0,
+      ltv6: 1.5, // workbook carried 4-month = 1.29, sits between 3 & 6 mo
+      ltv12: 2.0,
       delayedMultiplier: 0.2,
     },
   },
@@ -101,8 +108,6 @@ const MARKETS: MarketMeta[] = [
     currency: "USD",
     taxLabel: "Sales tax",
     taxRate: 0.07,
-    ltvLabel: "4-month LTV",
-    ltvContribLabel: "1-Year LTV Contribution Margin",
     defaults: {
       aov: 81,
       cogsPct: 0.155,
@@ -111,7 +116,9 @@ const MARKETS: MarketMeta[] = [
       returnsPct: 0.018,
       shipping: 7.26,
       fulfilment: 0,
-      ltv: 0,
+      ltv3: 0.7,
+      ltv6: 1.1,
+      ltv12: 1.6,
       delayedMultiplier: 0.2,
     },
   },
@@ -148,6 +155,7 @@ function compute(m: MarketMeta, i: MarketInputs) {
   const returns = i.aov * i.returnsPct;
   const totalCost = tax + cogs + merchant + returns + i.shipping + i.fulfilment;
   const pctCost = i.aov > 0 ? totalCost / i.aov : 0;
+  const unitMargin = i.aov - totalCost; // first-order contribution before CAC
 
   // First-purchase break-even ROAS = 1 / (1 − cost%). Below/above are ±20%.
   const breakeven = pctCost < 1 ? 1 / (1 - pctCost) : Infinity;
@@ -159,28 +167,80 @@ function compute(m: MarketMeta, i: MarketInputs) {
     const cac = s.roas > 0 ? i.aov / s.roas : null;
     // Contribution after acquiring the customer at that CAC.
     const firstPurchaseCM = cac == null ? null : i.aov * (1 - pctCost) - cac;
-    // Same, but crediting the LTV uplift from future repeat orders.
-    const ltvCM = cac == null ? null : (i.aov - totalCost) * (1 + i.ltv) - cac;
-    return { ...s, cac, firstPurchaseCM, ltvCM };
+    // Same, but crediting the repeat-revenue uplift over each LTV horizon.
+    const ltvCM = (uplift: number) => (cac == null ? null : unitMargin * (1 + uplift) - cac);
+    return {
+      ...s,
+      cac,
+      firstPurchaseCM,
+      ltvCM3: ltvCM(i.ltv3),
+      ltvCM6: ltvCM(i.ltv6),
+      ltvCM12: ltvCM(i.ltv12),
+    };
   });
 
   // 28-day-click vs 1-day-click view. The delayed-purchase multiplier discounts
   // the 1DC target since fewer conversions are attributed in the 1-day window.
   const roas28 = breakeven;
   const roas1 = roas28 / (1 + i.delayedMultiplier);
-  const cpa28 = roas28 > 0 ? i.ltv / roas28 : null;
-  const cpa1 = roas1 > 0 ? i.ltv / roas1 : null;
+  const cpa28 = roas28 > 0 ? i.ltv6 / roas28 : null;
+  const cpa1 = roas1 > 0 ? i.ltv6 / roas1 : null;
 
   return {
     lines: { tax, cogs, merchant, returns, shipping: i.shipping, fulfilment: i.fulfilment },
     totalCost,
     pctCost,
+    unitMargin,
     breakeven,
     scenarios,
     roas28,
     roas1,
     cpa28,
     cpa1,
+  };
+}
+
+// Map calculator tabs → live cohort market codes from /api/dashboard.
+const LIVE_CODE: Record<string, string> = { "nl-be": "NL", uk: "UK", usa: "US" };
+
+// Real 3 / 6 / 12-month LTV contribution margin from the dashboard's cohort
+// engine (retentionEconomics). Cohort LTV is gross revenue per customer within
+// N days of first order; contribution = LTV × variable-margin% − CAC.
+function computeLive(m: any | null) {
+  if (!m) return null;
+  const variablePct =
+    (Number(m.cogsPct) || 0) +
+    (Number(m.shippingPct) || 0) +
+    (Number(m.paymentFeePct) || 0) +
+    (Number(m.fulfilmentPct) || 0);
+  const marginFrac =
+    variablePct > 0 && variablePct < 100
+      ? 1 - variablePct / 100
+      : m.breakEvenRoasDelivery
+        ? 1 / m.breakEvenRoasDelivery
+        : null;
+  const cac = Number(m.cac) || null;
+  const horizon = (ltv: number | null, mature: number) => {
+    const contrib = ltv != null && marginFrac != null ? ltv * marginFrac : null;
+    const cm = contrib != null ? (cac != null ? contrib - cac : contrib) : null;
+    const ratio = ltv != null && cac && cac > 0 ? ltv / cac : null;
+    return { ltv, mature, contrib, cm, ratio };
+  };
+  const rows = [
+    { label: "3-month", ...horizon(m.ltv90 ?? null, Number(m.matureCustomers90 ?? 0)) },
+    { label: "6-month", ...horizon(m.ltv180 ?? null, Number(m.matureCustomers180 ?? 0)) },
+    { label: "12-month", ...horizon(m.ltv365 ?? null, Number(m.matureCustomers365 ?? 0)) },
+  ];
+  const hasAny = rows.some((r) => r.ltv != null);
+  return {
+    currency: String(m.currency || "EUR"),
+    cac,
+    aov: Number(m.aov) || null,
+    marginFrac,
+    blendedRoas: Number(m.blendedRoas) || null,
+    breakEven: m.breakEvenRoasDelivery ?? null,
+    rows,
+    hasAny,
   };
 }
 
@@ -266,9 +326,19 @@ function UnitEconomicsPage() {
     Object.fromEntries(MARKETS.map((m) => [m.id, { ...m.defaults }])),
   );
 
+  // Live cohort LTV (real 3/6/12-month data) from the dashboard read API.
+  const dashboardQuery = useDashboard();
+  const econ = (dashboardQuery.data as any)?.retentionEconomics ?? null;
+
   const market = MARKETS.find((m) => m.id === activeId)!;
   const data = inputs[activeId];
   const r = useMemo(() => compute(market, data), [market, data]);
+
+  const liveMarket = Array.isArray(econ?.markets)
+    ? econ.markets.find((mm: any) => mm.market === LIVE_CODE[activeId]) ?? null
+    : null;
+  const live = useMemo(() => computeLive(liveMarket), [liveMarket]);
+  const liveLoading = dashboardQuery.isPending;
 
   const set = (patch: Partial<MarketInputs>) =>
     setInputs((prev) => ({ ...prev, [activeId]: { ...prev[activeId], ...patch } }));
@@ -290,7 +360,8 @@ function UnitEconomicsPage() {
             <div>
               <div className="text-[15px] font-semibold">Zapply Unit Economics Calculator</div>
               <div className="mt-0.5 text-[12px] text-neutral-500">
-                Break-even ROAS, max CAC and contribution margins per market · edit the
+                Break-even ROAS, max CAC and 3 / 6 / 12-month LTV contribution margins per market ·
+                edit the
                 <span className="mx-1 rounded bg-emerald-50 px-1 text-emerald-700">green</span>
                 cells to model your own numbers
               </div>
@@ -349,8 +420,14 @@ function UnitEconomicsPage() {
               <InputRow icon={<Boxes className="h-3 w-3" />} label="Fulfilment / unit" hint="pick & pack per unit">
                 <InputCell value={data.fulfilment} onChange={(v) => set({ fulfilment: v })} mode="money" symbol={sym} />
               </InputRow>
-              <InputRow icon={<TrendingUp className="h-3 w-3" />} label={market.ltvLabel} hint="repeat-revenue uplift on top of first order">
-                <InputCell value={data.ltv} onChange={(v) => set({ ltv: v })} mode="percent" />
+              <InputRow icon={<TrendingUp className="h-3 w-3" />} label="3-month LTV uplift" hint="repeat revenue, % of first order">
+                <InputCell value={data.ltv3} onChange={(v) => set({ ltv3: v })} mode="percent" />
+              </InputRow>
+              <InputRow icon={<TrendingUp className="h-3 w-3" />} label="6-month LTV uplift" hint="repeat revenue, % of first order">
+                <InputCell value={data.ltv6} onChange={(v) => set({ ltv6: v })} mode="percent" />
+              </InputRow>
+              <InputRow icon={<TrendingUp className="h-3 w-3" />} label="12-month LTV uplift" hint="repeat revenue, % of first order">
+                <InputCell value={data.ltv12} onChange={(v) => set({ ltv12: v })} mode="percent" />
               </InputRow>
               <InputRow icon={<Gauge className="h-3 w-3" />} label="Delayed purchase mult." hint="1DC vs 28DC attribution gap">
                 <InputCell value={data.delayedMultiplier} onChange={(v) => set({ delayedMultiplier: v })} mode="percent" />
@@ -371,42 +448,132 @@ function UnitEconomicsPage() {
                 <span className="text-neutral-600">Percentage cost</span>
                 <span className="tabular-nums font-semibold text-emerald-800">{pct(r.pctCost)}</span>
               </div>
+              <div className="flex items-center justify-between text-[12px]">
+                <span className="text-neutral-600">First-order unit margin</span>
+                <span className="tabular-nums font-semibold text-emerald-800">{money(r.unitMargin, cur)}</span>
+              </div>
             </div>
           </div>
 
           {/* ── Results ── */}
           <div className="space-y-4">
+            {/* Live cohort LTV contribution margin (real 3/6/12-month data) */}
+            <div className="rounded-xl border bg-white shadow-sm p-5">
+              <div className="flex items-start justify-between flex-wrap gap-2">
+                <div className="flex items-start gap-2.5">
+                  <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-violet-100">
+                    <Activity className="h-4 w-4 text-violet-700" />
+                  </div>
+                  <div>
+                    <div className="text-[14px] font-semibold">
+                      Live LTV contribution margin · 3 / 6 / 12-month
+                    </div>
+                    <div className="mt-0.5 text-[12px] text-neutral-500">
+                      Real cohort LTV from your Shopify order history · contribution = LTV ×
+                      variable margin − CAC
+                    </div>
+                  </div>
+                </div>
+                <span className="rounded-md bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                  Actual
+                </span>
+              </div>
+
+              {liveLoading ? (
+                <div className="mt-4 h-28 animate-pulse rounded-lg bg-neutral-100" />
+              ) : live && live.hasAny ? (
+                <>
+                  <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-neutral-500">
+                    <span>AOV <strong className="text-neutral-700">{money(live.aov, live.currency)}</strong></span>
+                    <span>CAC <strong className="text-neutral-700">{money(live.cac, live.currency)}</strong></span>
+                    <span>Variable margin <strong className="text-neutral-700">{pct(live.marginFrac)}</strong></span>
+                    <span>Blended ROAS <strong className="text-neutral-700">{x2(live.blendedRoas)}</strong></span>
+                  </div>
+                  <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-100">
+                    <table className="w-full min-w-[560px] text-[12px]">
+                      <thead>
+                        <tr className="bg-neutral-50 text-left text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+                          <th className="px-3 py-2.5">Horizon</th>
+                          <th className="px-3 py-2.5 text-right">Cohort LTV</th>
+                          <th className="px-3 py-2.5 text-right">Contribution (× margin)</th>
+                          <th className="px-3 py-2.5 text-right">LTV CM (− CAC)</th>
+                          <th className="px-3 py-2.5 text-right">LTV / CAC</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {live.rows.map((row) => (
+                          <tr key={row.label} className="border-t border-neutral-100">
+                            <td className="px-3 py-2.5 font-medium">{row.label} LTV</td>
+                            {row.ltv == null ? (
+                              <td colSpan={4} className="px-3 py-2.5 text-neutral-400">
+                                <span title={`${row.mature} mature customers`}>maturing — cohorts not old enough yet</span>
+                              </td>
+                            ) : (
+                              <>
+                                <td className="px-3 py-2.5 text-right tabular-nums">{money(row.ltv, live.currency)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-neutral-600">{money(row.contrib, live.currency)}</td>
+                                <td className="px-3 py-2.5 text-right"><Margin value={row.cm} cur={live.currency} /></td>
+                                <td className="px-3 py-2.5 text-right">
+                                  <span className={`tabular-nums font-semibold ${row.ratio == null ? "text-neutral-400" : row.ratio >= 3 ? "text-emerald-700" : row.ratio >= 1 ? "text-amber-600" : "text-rose-600"}`}>
+                                    {row.ratio != null ? x2(row.ratio) : DASH}
+                                  </span>
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-2 text-[10px] text-neutral-400">
+                    3/6/12-month ≈ 90/180/365-day cohort windows · "maturing" = not enough cohort age yet ·
+                    LTV/CAC ≥3× healthy, 1–3× watch, &lt;1× losing money.
+                  </div>
+                </>
+              ) : (
+                <div className="mt-3 rounded-lg border border-violet-100 bg-violet-50/50 p-4 text-[12px] text-neutral-600">
+                  Live cohort LTV for <strong>{market.name}</strong> is still building from the Shopify
+                  orders mirror — the {market.name === "USA" ? "US" : market.name} windows fill in as order
+                  history matures. Use the <strong>what-if model</strong> below in the meantime.
+                </div>
+              )}
+            </div>
+
             {/* Break-even headline */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Stat label="Break-even ROAS" value={x2(r.breakeven)} tone="emerald" icon={<Target className="h-4 w-4" />} />
               <Stat label="Max CAC @ B/E" value={money(r.scenarios[1].cac, cur)} tone="neutral" icon={<Receipt className="h-4 w-4" />} />
-              <Stat label="28DC CPA" value={money(r.cpa28, cur)} tone="neutral" icon={<Gauge className="h-4 w-4" />} />
-              <Stat label="1DC CPA" value={money(r.cpa1, cur)} tone="neutral" icon={<Gauge className="h-4 w-4" />} />
+              <Stat label="28DC ROAS" value={x2(r.roas28)} tone="neutral" icon={<Gauge className="h-4 w-4" />} />
+              <Stat label="1DC ROAS" value={x2(r.roas1)} tone="neutral" icon={<Gauge className="h-4 w-4" />} />
             </div>
 
-            {/* ROAS targets matrix */}
+            {/* ROAS targets matrix with 3/6/12-month LTV contribution margins */}
             <div className="rounded-xl border bg-white shadow-sm p-5">
               <div className="flex items-start gap-2.5">
                 <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-100">
                   <Target className="h-4 w-4 text-blue-700" />
                 </div>
                 <div>
-                  <div className="text-[14px] font-semibold">ROAS targets & contribution</div>
+                  <div className="text-[14px] font-semibold">
+                    What-if model · ROAS targets &amp; LTV contribution margin
+                  </div>
                   <div className="mt-0.5 text-[12px] text-neutral-500">
-                    Three efficiency levels around first-purchase break-even
+                    Break-even ROAS plus modeled contribution at 3 / 6 / 12-month LTV horizons
                   </div>
                 </div>
               </div>
 
               <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-100">
-                <table className="w-full min-w-[620px] text-[12px]">
+                <table className="w-full min-w-[720px] text-[12px]">
                   <thead>
                     <tr className="bg-neutral-50 text-left text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
                       <th className="px-3 py-2.5">Scenario</th>
                       <th className="px-3 py-2.5 text-right">ROAS target</th>
                       <th className="px-3 py-2.5 text-right">Max CAC</th>
-                      <th className="px-3 py-2.5 text-right">First-purchase margin</th>
-                      <th className="px-3 py-2.5 text-right">{market.ltvContribLabel}</th>
+                      <th className="px-3 py-2.5 text-right">1st-order margin</th>
+                      <th className="px-3 py-2.5 text-right">3-mo LTV CM</th>
+                      <th className="px-3 py-2.5 text-right">6-mo LTV CM</th>
+                      <th className="px-3 py-2.5 text-right">12-mo LTV CM</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -431,7 +598,13 @@ function UnitEconomicsPage() {
                             <Margin value={s.firstPurchaseCM} cur={cur} />
                           </td>
                           <td className="px-3 py-2.5 text-right">
-                            <Margin value={s.ltvCM} cur={cur} />
+                            <Margin value={s.ltvCM3} cur={cur} />
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <Margin value={s.ltvCM6} cur={cur} />
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <Margin value={s.ltvCM12} cur={cur} />
                           </td>
                         </tr>
                       );
@@ -445,9 +618,10 @@ function UnitEconomicsPage() {
                 <span>
                   <strong>ROAS target</strong> = revenue per {sym}1 of ad spend needed at that level ·{" "}
                   <strong>Max CAC</strong> = AOV ÷ ROAS, the most you can pay to acquire a customer ·{" "}
-                  <strong>First-purchase margin</strong> = contribution from order one only ·{" "}
-                  <strong>{market.ltvContribLabel}</strong> credits the repeat-revenue uplift
-                  ({pct(data.ltv)}). Margins turn negative when CAC exceeds the contribution at that level.
+                  <strong>1st-order margin</strong> = contribution from order one only ·{" "}
+                  <strong>LTV CM</strong> credits the repeat-revenue uplift over each horizon
+                  (3-mo {pct(data.ltv3)}, 6-mo {pct(data.ltv6)}, 12-mo {pct(data.ltv12)}).
+                  Margins turn negative when CAC exceeds the contribution at that level.
                 </span>
               </div>
             </div>
@@ -464,6 +638,16 @@ function UnitEconomicsPage() {
                 <Stat label="28DC CPA" value={money(r.cpa28, cur)} tone="neutral" icon={<Receipt className="h-4 w-4" />} />
                 <Stat label="1DC CPA" value={money(r.cpa1, cur)} tone="neutral" icon={<Receipt className="h-4 w-4" />} />
               </div>
+            </div>
+
+            <div className="flex gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-[11px] text-neutral-600">
+              <Info className="h-4 w-4 shrink-0 mt-px" />
+              <span>
+                The <strong>Live</strong> card above shows real 3/6/12-month LTV contribution margin from your
+                Shopify cohorts (source of truth). The <strong>what-if model</strong> here lets you stress-test
+                targets — its LTV uplift % green cells are editable assumptions, seeded from the workbook
+                (NL&nbsp;6-mo, UK&nbsp;4-mo) with placeholder 3- &amp; 12-month curves.
+              </span>
             </div>
           </div>
         </div>
