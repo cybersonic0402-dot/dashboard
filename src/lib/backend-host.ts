@@ -9,17 +9,22 @@
 // variable covers both the browser and the api.* server routes. A bare host
 // (no scheme) is auto-upgraded to https://. Legacy names are still accepted.
 function rawHost(): string | undefined {
-  const fromImportMeta = (import.meta as any)?.env ?? {};
+  // Direct literal `import.meta.env.VITE_*` reads — Vite statically inlines
+  // these in BOTH the browser bundle and the SSR transform. A captured
+  // reference (`const e = import.meta.env; e[key]`) is NOT reliably replaced,
+  // which made the value read as undefined under local `vite dev` SSR even with
+  // the variable correctly set in .env (production worked because Vercel also
+  // exposes it via process.env at build time).
   const fromProcess = typeof process !== "undefined" ? process.env ?? {} : {};
   return (
-    fromImportMeta.VITE_BACKEND_HOST ||
+    import.meta.env.VITE_BACKEND_HOST ||
+    import.meta.env.VITE_API_URL ||
+    import.meta.env.VITE_BACKEND_SYNC_URL ||
+    // server-side (Vercel / Node) real env vars
     fromProcess.VITE_BACKEND_HOST ||
     fromProcess.BACKEND_HOST ||
-    // legacy / fallbacks
-    fromImportMeta.VITE_API_URL ||
     fromProcess.VITE_API_URL ||
     fromProcess.BACKEND_SYNC_URL ||
-    fromImportMeta.VITE_BACKEND_SYNC_URL ||
     fromProcess.VITE_BACKEND_SYNC_URL ||
     undefined
   );
