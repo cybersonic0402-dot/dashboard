@@ -16,6 +16,7 @@ import {
   Briefcase,
   Gauge,
   TrendingUp,
+  Calculator,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -41,6 +42,7 @@ type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; exact?
 
 const navItems: NavItem[] = [
   { to: "/overview-dashboard", label: "Overview", icon: LayoutDashboard },
+  { to: "/unit-economics", label: "Unit economics", icon: Calculator },
 ];
 
 const pillarItems: NavItem[] = [

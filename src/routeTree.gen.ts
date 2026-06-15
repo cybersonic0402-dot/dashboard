@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as UnitEconomicsRouteImport } from './routes/unit-economics'
 import { Route as TripleWhaleRouteImport } from './routes/triple-whale'
 import { Route as SubscriptionsRouteImport } from './routes/subscriptions'
 import { Route as StoreRouteImport } from './routes/store'
@@ -51,6 +52,11 @@ import { Route as ApiAuthXeroRouteImport } from './routes/api.auth.xero'
 import { Route as ApiAuthJorttRouteImport } from './routes/api.auth.jortt'
 import { Route as ApiAuthXeroCallbackRouteImport } from './routes/api.auth.xero.callback'
 
+const UnitEconomicsRoute = UnitEconomicsRouteImport.update({
+  id: '/unit-economics',
+  path: '/unit-economics',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TripleWhaleRoute = TripleWhaleRouteImport.update({
   id: '/triple-whale',
   path: '/triple-whale',
@@ -270,6 +276,7 @@ export interface FileRoutesByFullPath {
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/unit-economics': typeof UnitEconomicsRoute
   '/api/claude-chat': typeof ApiClaudeChatRoute
   '/api/forecast-chat': typeof ApiForecastChatRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
@@ -313,6 +320,7 @@ export interface FileRoutesByTo {
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/unit-economics': typeof UnitEconomicsRoute
   '/api/claude-chat': typeof ApiClaudeChatRoute
   '/api/forecast-chat': typeof ApiForecastChatRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
@@ -357,6 +365,7 @@ export interface FileRoutesById {
   '/store': typeof StoreRoute
   '/subscriptions': typeof SubscriptionsRoute
   '/triple-whale': typeof TripleWhaleRoute
+  '/unit-economics': typeof UnitEconomicsRoute
   '/api/claude-chat': typeof ApiClaudeChatRoute
   '/api/forecast-chat': typeof ApiForecastChatRoute
   '/api/ig-debug': typeof ApiIgDebugRoute
@@ -402,6 +411,7 @@ export interface FileRouteTypes {
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/unit-economics'
     | '/api/claude-chat'
     | '/api/forecast-chat'
     | '/api/ig-debug'
@@ -445,6 +455,7 @@ export interface FileRouteTypes {
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/unit-economics'
     | '/api/claude-chat'
     | '/api/forecast-chat'
     | '/api/ig-debug'
@@ -488,6 +499,7 @@ export interface FileRouteTypes {
     | '/store'
     | '/subscriptions'
     | '/triple-whale'
+    | '/unit-economics'
     | '/api/claude-chat'
     | '/api/forecast-chat'
     | '/api/ig-debug'
@@ -532,6 +544,7 @@ export interface RootRouteChildren {
   StoreRoute: typeof StoreRoute
   SubscriptionsRoute: typeof SubscriptionsRoute
   TripleWhaleRoute: typeof TripleWhaleRoute
+  UnitEconomicsRoute: typeof UnitEconomicsRoute
   ApiClaudeChatRoute: typeof ApiClaudeChatRoute
   ApiForecastChatRoute: typeof ApiForecastChatRoute
   ApiIgDebugRoute: typeof ApiIgDebugRoute
@@ -563,6 +576,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/unit-economics': {
+      id: '/unit-economics'
+      path: '/unit-economics'
+      fullPath: '/unit-economics'
+      preLoaderRoute: typeof UnitEconomicsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/triple-whale': {
       id: '/triple-whale'
       path: '/triple-whale'
@@ -891,6 +911,7 @@ const rootRouteChildren: RootRouteChildren = {
   StoreRoute: StoreRoute,
   SubscriptionsRoute: SubscriptionsRoute,
   TripleWhaleRoute: TripleWhaleRoute,
+  UnitEconomicsRoute: UnitEconomicsRoute,
   ApiClaudeChatRoute: ApiClaudeChatRoute,
   ApiForecastChatRoute: ApiForecastChatRoute,
   ApiIgDebugRoute: ApiIgDebugRoute,
