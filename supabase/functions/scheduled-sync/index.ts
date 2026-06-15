@@ -14,7 +14,7 @@
 
 const APP_URL =
   Deno.env.get("APP_SYNC_URL") ??
-  "https://zapply.codestrokes.com/api/public/sync?async=1";
+  "https://dashboard-zap.vercel.app/api/public/sync?async=1";
 
 Deno.serve(async (req) => {
   const startedAt = new Date().toISOString();

@@ -2277,6 +2277,53 @@ export function getXeroLastTokenError() {
   return __xeroLastTokenError;
 }
 
+// Proactively rotate the refresh token once it's older than this, even if the
+// access token is still valid. Xero refresh tokens live 60 days; rotating well
+// before that means a quiet period (no dashboard loads, heavy sync skipped)
+// never lets the family lapse and force a manual reconnect.
+const XERO_PROACTIVE_REFRESH_DAYS = 30;
+
+function xeroRefreshTokenAgeDays(row: any): number {
+  const issued = row?.metadata?.refreshed_at ?? row?.updated_at ?? null;
+  if (!issued) return Infinity;
+  const t = new Date(issued).getTime();
+  return Number.isFinite(t) ? (Date.now() - t) / 86_400_000 : Infinity;
+}
+
+// Lightweight keep-alive: refresh the Xero access token (rotating the refresh
+// token) so the 60-day refresh-token TTL never lapses during quiet periods.
+// Fast (<2s) — meant to be called synchronously by a frequent cron so the token
+// stays alive even when the heavy multi-provider sync (fire-and-forget, and
+// killed on Vercel/Workers after the response) never completes.
+export async function refreshXeroToken(): Promise<{
+  ok: boolean;
+  error: string | null;
+  expiresAt: string | null;
+  tenant: string | null;
+  refreshTokenAgeDays: number | null;
+}> {
+  const token = await getXeroToken();
+  let expiresAt: string | null = null;
+  let tenant: string | null = null;
+  let ageDays: number | null = null;
+  try {
+    const row = await readXeroTokenRow();
+    expiresAt = row?.expires_at ?? null;
+    tenant = row?.metadata?.tenant_name ?? null;
+    const age = xeroRefreshTokenAgeDays(row);
+    ageDays = Number.isFinite(age) ? Math.round(age * 10) / 10 : null;
+  } catch {
+    /* best-effort metadata read */
+  }
+  return {
+    ok: !!token,
+    error: token ? null : getXeroLastTokenError(),
+    expiresAt,
+    tenant,
+    refreshTokenAgeDays: ageDays,
+  };
+}
+
 let __xeroTokenRefreshInFlight: Promise<string | null> | null = null;
 
 function xeroTokenValidUntil(row: any, bufferMs = 2 * 60 * 1000) {
