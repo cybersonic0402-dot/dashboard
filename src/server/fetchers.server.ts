@@ -2396,8 +2396,15 @@ async function getXeroToken(): Promise<string | null> {
     return null;
   }
 
-  // Return cached access_token if still valid (2-min buffer)
-  if (row.access_token && xeroTokenValidUntil(row)) {
+  // Return cached access_token if still valid (2-min buffer) AND the refresh
+  // token isn't aging toward its 60-day TTL. Once it crosses the proactive
+  // threshold we fall through to refresh — rotating the refresh token resets
+  // the 60-day clock so a long quiet period can never force a reconnect.
+  if (
+    row.access_token &&
+    xeroTokenValidUntil(row) &&
+    xeroRefreshTokenAgeDays(row) < XERO_PROACTIVE_REFRESH_DAYS
+  ) {
     return row.access_token;
   }
 

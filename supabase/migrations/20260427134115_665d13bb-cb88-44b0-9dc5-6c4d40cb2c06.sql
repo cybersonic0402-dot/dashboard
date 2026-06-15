@@ -1,1 +1,0 @@
-DELETE FROM public.data_cache WHERE provider IN ('juo','loop');

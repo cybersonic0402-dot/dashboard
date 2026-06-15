@@ -43,6 +43,7 @@ import { Route as ApiForecastChatRouteImport } from './routes/api.forecast-chat'
 import { Route as ApiClaudeChatRouteImport } from './routes/api.claude-chat'
 import { Route as ApiShopifyInstallRouteImport } from './routes/api.shopify.install'
 import { Route as ApiShopifyCallbackRouteImport } from './routes/api.shopify.callback'
+import { Route as ApiPublicXeroRefreshRouteImport } from './routes/api.public.xero-refresh'
 import { Route as ApiPublicSyncRouteImport } from './routes/api.public.sync'
 import { Route as ApiPublicNightlySyncRouteImport } from './routes/api.public.nightly-sync'
 import { Route as ApiPublicDebugRefundsRouteImport } from './routes/api.public.debug-refunds'
@@ -223,6 +224,11 @@ const ApiShopifyCallbackRoute = ApiShopifyCallbackRouteImport.update({
   path: '/api/shopify/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicXeroRefreshRoute = ApiPublicXeroRefreshRouteImport.update({
+  id: '/api/public/xero-refresh',
+  path: '/api/public/xero-refresh',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicSyncRoute = ApiPublicSyncRouteImport.update({
   id: '/api/public/sync',
   path: '/api/public/sync',
@@ -304,6 +310,7 @@ export interface FileRoutesByFullPath {
   '/api/public/debug-refunds': typeof ApiPublicDebugRefundsRoute
   '/api/public/nightly-sync': typeof ApiPublicNightlySyncRoute
   '/api/public/sync': typeof ApiPublicSyncRoute
+  '/api/public/xero-refresh': typeof ApiPublicXeroRefreshRoute
   '/api/shopify/callback': typeof ApiShopifyCallbackRoute
   '/api/shopify/install': typeof ApiShopifyInstallRoute
   '/api/auth/xero/callback': typeof ApiAuthXeroCallbackRoute
@@ -348,6 +355,7 @@ export interface FileRoutesByTo {
   '/api/public/debug-refunds': typeof ApiPublicDebugRefundsRoute
   '/api/public/nightly-sync': typeof ApiPublicNightlySyncRoute
   '/api/public/sync': typeof ApiPublicSyncRoute
+  '/api/public/xero-refresh': typeof ApiPublicXeroRefreshRoute
   '/api/shopify/callback': typeof ApiShopifyCallbackRoute
   '/api/shopify/install': typeof ApiShopifyInstallRoute
   '/api/auth/xero/callback': typeof ApiAuthXeroCallbackRoute
@@ -393,6 +401,7 @@ export interface FileRoutesById {
   '/api/public/debug-refunds': typeof ApiPublicDebugRefundsRoute
   '/api/public/nightly-sync': typeof ApiPublicNightlySyncRoute
   '/api/public/sync': typeof ApiPublicSyncRoute
+  '/api/public/xero-refresh': typeof ApiPublicXeroRefreshRoute
   '/api/shopify/callback': typeof ApiShopifyCallbackRoute
   '/api/shopify/install': typeof ApiShopifyInstallRoute
   '/api/auth/xero/callback': typeof ApiAuthXeroCallbackRoute
@@ -439,6 +448,7 @@ export interface FileRouteTypes {
     | '/api/public/debug-refunds'
     | '/api/public/nightly-sync'
     | '/api/public/sync'
+    | '/api/public/xero-refresh'
     | '/api/shopify/callback'
     | '/api/shopify/install'
     | '/api/auth/xero/callback'
@@ -483,6 +493,7 @@ export interface FileRouteTypes {
     | '/api/public/debug-refunds'
     | '/api/public/nightly-sync'
     | '/api/public/sync'
+    | '/api/public/xero-refresh'
     | '/api/shopify/callback'
     | '/api/shopify/install'
     | '/api/auth/xero/callback'
@@ -527,6 +538,7 @@ export interface FileRouteTypes {
     | '/api/public/debug-refunds'
     | '/api/public/nightly-sync'
     | '/api/public/sync'
+    | '/api/public/xero-refresh'
     | '/api/shopify/callback'
     | '/api/shopify/install'
     | '/api/auth/xero/callback'
@@ -570,6 +582,7 @@ export interface RootRouteChildren {
   ApiPublicDebugRefundsRoute: typeof ApiPublicDebugRefundsRoute
   ApiPublicNightlySyncRoute: typeof ApiPublicNightlySyncRoute
   ApiPublicSyncRoute: typeof ApiPublicSyncRoute
+  ApiPublicXeroRefreshRoute: typeof ApiPublicXeroRefreshRoute
   ApiShopifyCallbackRoute: typeof ApiShopifyCallbackRoute
   ApiShopifyInstallRoute: typeof ApiShopifyInstallRoute
 }
@@ -814,6 +827,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiShopifyCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/xero-refresh': {
+      id: '/api/public/xero-refresh'
+      path: '/api/public/xero-refresh'
+      fullPath: '/api/public/xero-refresh'
+      preLoaderRoute: typeof ApiPublicXeroRefreshRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/sync': {
       id: '/api/public/sync'
       path: '/api/public/sync'
@@ -937,6 +957,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicDebugRefundsRoute: ApiPublicDebugRefundsRoute,
   ApiPublicNightlySyncRoute: ApiPublicNightlySyncRoute,
   ApiPublicSyncRoute: ApiPublicSyncRoute,
+  ApiPublicXeroRefreshRoute: ApiPublicXeroRefreshRoute,
   ApiShopifyCallbackRoute: ApiShopifyCallbackRoute,
   ApiShopifyInstallRoute: ApiShopifyInstallRoute,
 }
